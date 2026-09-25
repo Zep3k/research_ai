@@ -8,7 +8,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # V0.1 tables remain available while the old investigate workflow is retired
 # gradually. New research state belongs in the typed graph tables below.
@@ -248,6 +248,7 @@ CREATE TABLE IF NOT EXISTS research_iterations (
     material_progress INTEGER NOT NULL DEFAULT 0
         CHECK (material_progress IN (0, 1)),
     artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+    consumed_entity_ids_json TEXT NOT NULL DEFAULT '[]',
     duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
     attack_outcome TEXT NOT NULL DEFAULT 'not_applicable'
         CHECK (attack_outcome IN (
@@ -828,6 +829,12 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
         _migrate_workstreams_v5(con)
     if version < 6:
         _migrate_workstreams_v6(con)
+    if version < 7:
+        _add_column(
+            con,
+            "research_iterations",
+            "consumed_entity_ids_json TEXT NOT NULL DEFAULT '[]'",
+        )
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -845,6 +852,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
     _record_migration(con, 5, "develop_workstream_type")
     _record_migration(con, 6, "bounded_research_controller")
+    _record_migration(con, 7, "research_iteration_synthesis_inputs")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -879,6 +887,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
         _record_migration(con, 5, "develop_workstream_type")
         _record_migration(con, 6, "bounded_research_controller")
+        _record_migration(con, 7, "research_iteration_synthesis_inputs")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

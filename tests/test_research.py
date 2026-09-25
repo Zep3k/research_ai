@@ -19,10 +19,13 @@ from theory.research import (
     RESEARCH_MAX_OUTPUT_TOKENS,
     ResearchArtifact,
     ResearchStepReport,
+    _relevant_synthesis_inputs,
     _research_prompt,
     _validate_step_report,
+    choose_next_operation,
     research,
 )
+from theory.research_context import for_workstream
 
 
 def decision_from_prompt(prompt: str) -> dict:
@@ -117,6 +120,45 @@ def make_research_workstream(entity_type="ResearchIdea", title="Promising direct
     return workstream, target
 
 
+def completed_history(operation, target_entity_id, *, consumed_entity_ids=()):
+    return {
+        "status": "completed",
+        "operation": operation,
+        "target_entity_id": target_entity_id,
+        "consumed_entity_ids_json": json.dumps(consumed_entity_ids),
+    }
+
+
+def current_choice(workstream, target, history=()):
+    context = for_workstream(workstream)
+    primary = next(entity for entity in context.entities if int(entity["id"]) == target)
+    return choose_next_operation(context, workstream, primary, tuple(history))
+
+
+def add_linked_research_entity(
+    workstream,
+    entity_type,
+    title,
+    *,
+    role="created",
+    related_entity_ids=(),
+    proof_obligation=False,
+):
+    with connect() as con:
+        entity_id = add_entity(con, entity_type, title)
+        link_workstream_entity(con, workstream, entity_id, role)
+        if related_entity_ids:
+            set_attribute(
+                con,
+                entity_id,
+                "related_entity_ids",
+                json.dumps(related_entity_ids),
+            )
+        if proof_obligation:
+            set_attribute(con, entity_id, "is_proof_obligation", "true")
+    return entity_id
+
+
 class MinimalResearchContext:
     sources = ()
 
@@ -162,21 +204,42 @@ def test_attack_prompt_excludes_not_applicable_attack_outcome():
 
 def test_synthesize_prompt_requires_controller_consumed_ids_in_any_order():
     prompt = _research_prompt(
-        MinimalResearchContext(1, 2, 3),
+        MinimalResearchContext(1, 4, 8, 12, 17),
         {"id": 1},
         OperationChoice(
             "synthesize",
-            1,
+            17,
             "Regression test",
-            consumed_entity_ids=(2, 3),
+            consumed_entity_ids=(4, 8, 12),
         ),
     )
+    decision = decision_from_prompt(prompt)
 
     assert (
-        "consumed_entity_ids MUST contain exactly the controller-selected IDs [2, 3], "
+        "consumed_entity_ids MUST contain exactly the controller-selected IDs [4, 8, 12], "
         "in any order" in prompt
     )
-    assert '"consumed_entity_ids": [2, 3]' in prompt
+    assert decision["required_consumed_entity_ids"] == [4, 8, 12]
+    assert decision["required_artifact_related_entity_ids"] == [4, 8, 12, 17]
+    assert '"consumed_entity_ids": [4, 8, 12]' in prompt
+    assert '"related_entity_ids": [4, 8, 12, 17]' in prompt
+    assert "EVERY artifact emitted by this synthesis operation MUST include EVERY" in prompt
+    assert "minimum required related_entity_ids are exactly: [4, 8, 12, 17]" in prompt
+    assert "successful synthesis artifacts AND failed_approach or obstruction" in prompt
+    assert "they must also occur in each" in prompt
+    assert "ADDRESSED OBLIGATION RULES" in prompt
+    assert "ONLY if THIS response also emits" in prompt
+    assert "artifact_type lemma or proof_attempt" in prompt
+    assert "does NOT by itself count as addressing an obligation" in prompt
+    assert "Never claim an obligation is addressed merely because it is the selected target" in prompt
+    assert "The selected target obligation is #17" in prompt
+    assert "SUCCESS CASE" in prompt
+    assert "Then and only then include #17 in addressed_obligation_ids" in prompt
+    assert "FAILURE / PARTIAL-PROGRESS CASE" in prompt
+    assert "set addressed_obligation_ids to []" in prompt
+    assert 'Do not call partial progress "addressed"' in prompt
+    assert "Otherwise leave addressed_obligation_ids empty" in prompt
+    assert '"addressed_obligation_ids": []' in prompt
 
 
 @pytest.mark.parametrize("operation", ["develop", "attack", "prove"])
@@ -187,8 +250,14 @@ def test_non_synthesis_prompts_require_empty_consumed_ids(operation):
         OperationChoice(operation, 1, "Regression test"),
     )
 
+    decision = decision_from_prompt(prompt)
+
     assert "For non-synthesis operations, consumed_entity_ids MUST be []." in prompt
+    assert decision["required_consumed_entity_ids"] == []
+    assert decision["required_artifact_related_entity_ids"] == [1]
     assert '"consumed_entity_ids": []' in prompt
+    assert '"related_entity_ids": [1]' in prompt
+    assert "minimum required related_entity_ids" not in prompt
 
 
 def test_research_prompt_and_schema_bound_artifact_output():
@@ -417,6 +486,207 @@ def synthesis_report(consumed_entity_ids):
     )
 
 
+def synthesis_reference_report(artifact_type, related_entity_ids):
+    successful = artifact_type == "proof_attempt"
+    branch_status = {
+        "failed_approach": "failed",
+        "obstruction": "blocked",
+    }.get(artifact_type)
+    return ResearchStepReport(
+        operation="synthesize",
+        target_entity_id=17,
+        summary="Regression test synthesis references.",
+        artifacts=[
+            artifact(
+                artifact_type,
+                f"Synthesis artifact of type {artifact_type}.",
+                f"{artifact_type}_synthesis_reference_validation",
+                related_entity_ids,
+                branch_status=branch_status,
+            )
+        ],
+        consumed_entity_ids=[4, 8, 12],
+        addressed_obligation_ids=[17] if successful else [],
+        attack_outcome="not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+
+SYNTHESIS_REFERENCE_CHOICE = OperationChoice(
+    "synthesize",
+    17,
+    "Regression test",
+    consumed_entity_ids=(4, 8, 12),
+    open_obligation_ids=(17,),
+)
+
+
+def addressed_obligation_report(artifact_type, related_entity_ids):
+    return ResearchStepReport(
+        operation="develop",
+        target_entity_id=1,
+        summary="Regression test addressed obligation.",
+        artifacts=[
+            artifact(
+                artifact_type,
+                f"Candidate artifact of type {artifact_type}.",
+                f"{artifact_type}_addressed_obligation_validation",
+                related_entity_ids,
+            )
+        ],
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[8],
+        attack_outcome="not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+
+ADDRESSED_OBLIGATION_CHOICE = OperationChoice(
+    "develop",
+    1,
+    "Regression test",
+    open_obligation_ids=(8,),
+)
+
+
+@pytest.mark.parametrize("artifact_type", ["synthesis", "finding"])
+def test_non_proof_artifact_cannot_address_obligation(artifact_type):
+    with pytest.raises(
+        ModelOutputError,
+        match="Addressed obligation #8 lacks a lemma or proof attempt",
+    ):
+        _validate_step_report(
+            addressed_obligation_report(artifact_type, [1, 8]),
+            MinimalResearchContext(1, 8),
+            ADDRESSED_OBLIGATION_CHOICE,
+        )
+
+
+@pytest.mark.parametrize("artifact_type", ["lemma", "proof_attempt"])
+def test_proof_artifact_can_address_referenced_open_obligation(artifact_type):
+    _validate_step_report(
+        addressed_obligation_report(artifact_type, [1, 8]),
+        MinimalResearchContext(1, 8),
+        ADDRESSED_OBLIGATION_CHOICE,
+    )
+
+
+def test_lemma_cannot_address_obligation_it_does_not_reference():
+    with pytest.raises(
+        ModelOutputError,
+        match="Addressed obligation #8 lacks a lemma or proof attempt",
+    ):
+        _validate_step_report(
+            addressed_obligation_report("lemma", [1]),
+            MinimalResearchContext(1, 8),
+            ADDRESSED_OBLIGATION_CHOICE,
+        )
+
+
+def successful_addressed_synthesis_report(related_entity_ids):
+    return ResearchStepReport(
+        operation="synthesize",
+        target_entity_id=8,
+        summary="Concrete candidate proof of obligation eight.",
+        artifacts=[
+            artifact(
+                "lemma",
+                "The consumed artifacts imply the target obligation.",
+                "successful_synthesis_lemma",
+                related_entity_ids,
+            )
+        ],
+        consumed_entity_ids=[2, 4, 7],
+        addressed_obligation_ids=[8],
+        attack_outcome="not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+
+SUCCESSFUL_SYNTHESIS_CHOICE = OperationChoice(
+    "synthesize",
+    8,
+    "Regression test",
+    consumed_entity_ids=(2, 4, 7),
+    open_obligation_ids=(8,),
+)
+
+
+def test_successful_synthesis_lemma_addresses_target_obligation():
+    _validate_step_report(
+        successful_addressed_synthesis_report([2, 4, 7, 8]),
+        MinimalResearchContext(2, 4, 7, 8),
+        SUCCESSFUL_SYNTHESIS_CHOICE,
+    )
+
+
+def test_successful_synthesis_lemma_still_requires_every_consumed_reference():
+    with pytest.raises(
+        ModelOutputError,
+        match="did not reference every consumed artifact and the target obligation",
+    ):
+        _validate_step_report(
+            successful_addressed_synthesis_report([2, 4, 8]),
+            MinimalResearchContext(2, 4, 7, 8),
+            SUCCESSFUL_SYNTHESIS_CHOICE,
+        )
+
+
+@pytest.mark.parametrize(
+    ("related_entity_ids", "accepted"),
+    [
+        ([17], False),
+        ([4, 8, 12, 17], True),
+        ([17, 12, 4, 8], True),
+        ([4, 8, 17], False),
+    ],
+)
+def test_synthesis_artifact_requires_all_consumed_and_target_references(
+    related_entity_ids, accepted
+):
+    report = synthesis_reference_report("proof_attempt", related_entity_ids)
+    context = MinimalResearchContext(4, 8, 12, 17)
+
+    if accepted:
+        _validate_step_report(report, context, SYNTHESIS_REFERENCE_CHOICE)
+    else:
+        with pytest.raises(
+            ModelOutputError,
+            match="did not reference every consumed artifact and the target obligation",
+        ):
+            _validate_step_report(report, context, SYNTHESIS_REFERENCE_CHOICE)
+
+
+@pytest.mark.parametrize("artifact_type", ["failed_approach", "obstruction"])
+def test_unsuccessful_synthesis_artifacts_require_all_references(artifact_type):
+    context = MinimalResearchContext(4, 8, 12, 17)
+    complete_report = synthesis_reference_report(
+        artifact_type, [4, 8, 12, 17]
+    )
+
+    assert complete_report.addressed_obligation_ids == []
+    _validate_step_report(
+        complete_report,
+        context,
+        SYNTHESIS_REFERENCE_CHOICE,
+    )
+    with pytest.raises(
+        ModelOutputError,
+        match="did not reference every consumed artifact and the target obligation",
+    ):
+        _validate_step_report(
+            synthesis_reference_report(artifact_type, [4, 8, 17]),
+            context,
+            SYNTHESIS_REFERENCE_CHOICE,
+        )
+
+
 def test_synthesize_accepts_reordered_controller_consumed_ids():
     choice = OperationChoice(
         "synthesize", 1, "Regression test", consumed_entity_ids=(2, 3)
@@ -478,6 +748,244 @@ def test_non_synthesis_rejects_non_empty_consumed_ids(operation):
             report,
             MinimalResearchContext(1, 2),
             OperationChoice(operation, 1, "Regression test"),
+        )
+
+
+def test_open_obligation_prioritizes_newest_relevant_unattacked_proof_attempt(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Close the remaining inequality",
+        proof_obligation=True,
+    )
+    older_attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "First candidate proof",
+        related_entity_ids=(obligation,),
+    )
+    newer_attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Second candidate proof",
+        related_entity_ids=(obligation,),
+    )
+
+    choice = current_choice(workstream, target)
+
+    assert choice.operation == "attack"
+    assert choice.target_entity_id == newer_attempt
+    assert choice.target_entity_id != older_attempt
+    assert choice.open_obligation_ids == (obligation,)
+
+
+def test_proof_attempt_is_never_selected_as_a_prove_target(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Prove the remaining claim",
+        proof_obligation=True,
+    )
+    attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Already attempted proof",
+        related_entity_ids=(obligation,),
+    )
+    history = [completed_history("attack", attempt)]
+
+    choice = current_choice(workstream, target, history)
+
+    assert choice.operation == "develop"
+    assert not (
+        choice.operation == "prove" and choice.target_entity_id == attempt
+    )
+
+
+def test_attacked_attempt_allows_non_attempt_lemma_to_be_proved(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Finish the composition proof",
+        proof_obligation=True,
+    )
+    attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Attempt needing critique",
+        related_entity_ids=(obligation,),
+    )
+    lemma = add_linked_research_entity(
+        workstream,
+        "Lemma",
+        "A precise composition lemma",
+    )
+    context = for_workstream(workstream)
+    consumed = _relevant_synthesis_inputs(context, workstream, obligation)
+    history = [
+        completed_history("attack", attempt),
+        completed_history(
+            "synthesize", obligation, consumed_entity_ids=consumed
+        ),
+    ]
+
+    choice = current_choice(workstream, target, history)
+
+    assert choice.operation == "prove"
+    assert choice.target_entity_id == lemma
+    assert choice.target_entity_id != attempt
+
+
+def test_synthesis_repeats_only_after_consumed_input_set_changes(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Combine the available bounds",
+        proof_obligation=True,
+    )
+    attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "An attacked candidate proof",
+        related_entity_ids=(obligation,),
+    )
+    add_linked_research_entity(workstream, "Finding", "First relevant bound")
+    attacked_history = [completed_history("attack", attempt)]
+    first_choice = current_choice(workstream, target, attacked_history)
+    assert first_choice.operation == "synthesize"
+
+    same_inputs_history = [
+        *attacked_history,
+        completed_history(
+            "synthesize",
+            obligation,
+            consumed_entity_ids=first_choice.consumed_entity_ids,
+        ),
+    ]
+    repeated_choice = current_choice(workstream, target, same_inputs_history)
+    assert repeated_choice.operation == "develop"
+
+    new_input = add_linked_research_entity(
+        workstream, "Finding", "A genuinely new relevant bound"
+    )
+    changed_choice = current_choice(workstream, target, same_inputs_history)
+    assert changed_choice.operation == "synthesize"
+    assert new_input in changed_choice.consumed_entity_ids
+    assert set(changed_choice.consumed_entity_ids) != set(
+        first_choice.consumed_entity_ids
+    )
+
+
+def test_unrelated_unattacked_proof_attempt_is_not_prioritized(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    current_obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Current open obligation",
+        proof_obligation=True,
+    )
+    other_obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Already addressed historical obligation",
+        proof_obligation=True,
+    )
+    unrelated_attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Attempt for a different obligation",
+        related_entity_ids=(other_obligation,),
+    )
+    with connect() as con:
+        set_attribute(
+            con,
+            unrelated_attempt,
+            "addresses_obligation_ids",
+            json.dumps([other_obligation]),
+        )
+
+    choice = current_choice(workstream, target)
+
+    assert choice.open_obligation_ids == (current_obligation,)
+    assert not (
+        choice.operation == "attack"
+        and choice.target_entity_id == unrelated_attempt
+    )
+
+
+def test_completed_no_issue_attack_does_not_address_open_obligation(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Still requires a constructive proof",
+        proof_obligation=True,
+    )
+    attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Candidate that survived one attack",
+        related_entity_ids=(obligation,),
+    )
+    attack = completed_history("attack", attempt)
+    attack["attack_outcome"] = "no_critical_issue"
+
+    choice = current_choice(workstream, target, [attack])
+
+    assert obligation in choice.open_obligation_ids
+
+
+def test_prove_cannot_emit_free_standing_attempt_while_obligation_stays_open():
+    report = ResearchStepReport(
+        operation="prove",
+        target_entity_id=1,
+        summary="Another attempt without an obligation transition.",
+        artifacts=[
+            artifact(
+                "proof_attempt",
+                "A descendant proof attempt repeats the unresolved route.",
+                "descendant_unresolved_proof_attempt",
+                [1, 8],
+            )
+        ],
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[],
+        attack_outcome="not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+    with pytest.raises(
+        ModelOutputError,
+        match="Prove with open obligations must address one",
+    ):
+        _validate_step_report(
+            report,
+            MinimalResearchContext(1, 8),
+            OperationChoice(
+                "prove", 1, "Regression test", open_obligation_ids=(8,)
+            ),
         )
 
 
@@ -672,6 +1180,70 @@ def test_prove_is_selected_only_for_a_precise_candidate(monkeypatch, tmp_path):
     assert (iteration["operation"], iteration["target_entity_id"]) == ("prove", target)
 
 
+def test_proving_candidate_creates_attempt_that_is_attacked_not_proved(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    lemma = add_linked_research_entity(
+        workstream,
+        "Lemma",
+        "Candidate lemma A",
+    )
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Open obligation for candidate A",
+        proof_obligation=True,
+    )
+
+    def responder(decision, call_number):
+        if call_number == 1:
+            assert decision["operation"] == "prove"
+            assert decision["target_entity_id"] == lemma
+            return step_report(
+                decision,
+                [
+                    artifact(
+                        "proof_attempt",
+                        "Candidate A reduces the goal to one explicit missing implication.",
+                        "candidate_a_reduction_attempt",
+                        [lemma, obligation],
+                        epistemic_status="inference",
+                    ),
+                    artifact(
+                        "proof_obligation",
+                        "Prove the remaining implication exposed by candidate A.",
+                        "candidate_a_remaining_implication",
+                        [lemma],
+                        epistemic_status="unresolved",
+                    ),
+                ],
+            )
+        assert call_number == 2
+        assert decision["operation"] == "attack"
+        return step_report(decision, [], attack_outcome="inconclusive")
+
+    provider = DynamicProvider(responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "openai", max_calls=2)
+
+    assert outcome.calls_made == 2
+    with connect() as con:
+        iterations = con.execute(
+            "SELECT operation,target_entity_id FROM research_iterations ORDER BY iteration_number"
+        ).fetchall()
+        proof_attempt_id = con.execute(
+            "SELECT id FROM entities WHERE entity_type='ProofAttempt' ORDER BY id DESC LIMIT 1"
+        ).fetchone()[0]
+    assert [(row["operation"], row["target_entity_id"]) for row in iterations] == [
+        ("prove", lemma),
+        ("attack", proof_attempt_id),
+    ]
+    assert proof_attempt_id != target
+
+
 def test_synthesize_targets_blocked_obligation_and_consumes_two_artifacts(
     monkeypatch, tmp_path
 ):
@@ -713,12 +1285,19 @@ def test_synthesize_targets_blocked_obligation_and_consumes_two_artifacts(
     assert len(provider.calls) == 1
     with connect() as con:
         iteration = con.execute(
-            "SELECT operation,target_entity_id FROM research_iterations"
+            """
+            SELECT operation,target_entity_id,consumed_entity_ids_json
+            FROM research_iterations
+            """
         ).fetchone()
     assert (iteration["operation"], iteration["target_entity_id"]) == (
         "synthesize",
         blocker,
     )
+    assert set(json.loads(iteration["consumed_entity_ids_json"])) >= {
+        lemma,
+        technique,
+    }
 
 
 @pytest.mark.parametrize(
@@ -852,6 +1431,46 @@ def test_max_calls_is_a_hard_bound_and_new_material_is_persisted(monkeypatch, tm
     assert len(provider.calls) == 2
     assert len(outcome.artifact_ids) == 2
     assert outcome.stop_reason == "max_calls_exhausted"
+
+
+def test_max_calls_summary_reports_remaining_open_obligations(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Unresolved proof obligation",
+        proof_obligation=True,
+    )
+
+    def responder(decision, _):
+        assert decision["operation"] == "develop"
+        return step_report(
+            decision,
+            [
+                artifact(
+                    "finding",
+                    "A useful bound that does not yet close the obligation.",
+                    "useful_nonclosing_bound",
+                    [target],
+                    epistemic_status="inference",
+                )
+            ],
+        )
+
+    provider = DynamicProvider(responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "openai", max_calls=1)
+
+    assert outcome.stop_reason == "max_calls_exhausted"
+    assert outcome.final_status == "completed"
+    with connect() as con:
+        summary = con.execute(
+            "SELECT summary FROM workstreams WHERE id=?", (workstream,)
+        ).fetchone()[0]
+    assert "max_calls_exhausted" in summary
+    assert "1 proof obligation remains open" in summary
 
 
 def test_human_judgment_request_stops_controller_as_blocked(monkeypatch, tmp_path):

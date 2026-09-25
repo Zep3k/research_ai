@@ -177,6 +177,9 @@ def test_current_v01_state_is_backfilled_once_into_graph(monkeypatch, tmp_path):
             "SELECT legacy_table,legacy_id,entity_id FROM legacy_entity_links ORDER BY legacy_table"
         ).fetchall()
         api_columns = {row[1] for row in con.execute("PRAGMA table_info(api_calls)")}
+        iteration_columns = {
+            row[1] for row in con.execute("PRAGMA table_info(research_iterations)")
+        }
         migrations = con.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()
@@ -196,7 +199,8 @@ def test_current_v01_state_is_backfilled_once_into_graph(monkeypatch, tmp_path):
         ("papers", 4),
     ]
     assert "workstream_id" in api_columns
-    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5, 6]
+    assert "consumed_entity_ids_json" in iteration_columns
+    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5, 6, 7]
     assert count == 2
 
 

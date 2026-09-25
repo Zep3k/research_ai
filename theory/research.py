@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -322,6 +323,41 @@ def _completed_for_target(history: tuple[dict, ...], operation: str, entity_id: 
     )
 
 
+def _stored_id_set(raw: object) -> frozenset[int]:
+    if not isinstance(raw, str):
+        return frozenset()
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return frozenset()
+    if not isinstance(values, list):
+        return frozenset()
+    try:
+        return frozenset(int(value) for value in values)
+    except (TypeError, ValueError):
+        return frozenset()
+
+
+def _completed_synthesis_input_sets(
+    history: tuple[dict, ...], obligation_id: int
+) -> set[frozenset[int]]:
+    return {
+        _stored_id_set(row.get("consumed_entity_ids_json"))
+        for row in history
+        if row["status"] == "completed"
+        and row["operation"] == "synthesize"
+        and int(row["target_entity_id"]) == obligation_id
+    }
+
+
+def _is_new_synthesis_input_set(
+    history: tuple[dict, ...], obligation_id: int, consumed_entity_ids: tuple[int, ...]
+) -> bool:
+    return frozenset(consumed_entity_ids) not in _completed_synthesis_input_sets(
+        history, obligation_id
+    )
+
+
 def _attribute(context: ResearchContext, entity_id: int, key: str) -> str | None:
     return context.attributes.get(entity_id, {}).get(key)
 
@@ -393,6 +429,17 @@ def _addressed_obligation_ids(context: ResearchContext) -> set[int]:
     return addressed
 
 
+def _open_obligation_ids(
+    context: ResearchContext, workstream_id: int, primary_entity_id: int
+) -> tuple[int, ...]:
+    addressed = _addressed_obligation_ids(context)
+    return tuple(
+        entity_id
+        for entity_id in _obligation_ids(context, workstream_id, primary_entity_id)
+        if entity_id not in addressed
+    )
+
+
 def _branch_states(
     context: ResearchContext, workstream_id: int
 ) -> tuple[str, ...]:
@@ -434,6 +481,37 @@ def _relevant_synthesis_inputs(
     return tuple(int(entity["id"]) for entity in candidates[:4])
 
 
+def _relevant_unattacked_proof_attempts(
+    context: ResearchContext,
+    history: tuple[dict, ...],
+    open_obligation_ids: tuple[int, ...],
+) -> tuple[dict, ...]:
+    """Return newest linked proof attempts connected to a currently open obligation."""
+    if context.workstream is None or not open_obligation_ids:
+        return ()
+    workstream_id = int(context.workstream["id"])
+    linked = _linked_ids(context, workstream_id)
+    open_ids = set(open_obligation_ids)
+    candidates: list[dict] = []
+    for entity in context.entities:
+        entity_id = int(entity["id"])
+        if (
+            entity_id not in linked
+            or entity["entity_type"] != "ProofAttempt"
+            or entity["status"] != "active"
+            or entity["trust_state"] == "contradicted"
+            or _completed_for_target(history, "attack", entity_id)
+        ):
+            continue
+        attrs = context.attributes.get(entity_id, {})
+        related_ids = _stored_id_set(attrs.get("related_entity_ids"))
+        addressed_ids = _stored_id_set(attrs.get("addresses_obligation_ids"))
+        if open_ids & (set(related_ids) | set(addressed_ids)):
+            candidates.append(entity)
+    candidates.sort(key=lambda entity: -int(entity["id"]))
+    return tuple(candidates)
+
+
 def choose_next_operation(
     context: ResearchContext,
     workstream_id: int,
@@ -444,9 +522,7 @@ def choose_next_operation(
     primary_id = int(primary["id"])
     linked = _linked_ids(context, workstream_id)
     entity_by_id = {int(entity["id"]): entity for entity in context.entities}
-    obligations = _obligation_ids(context, workstream_id, primary_id)
-    addressed = _addressed_obligation_ids(context)
-    open_obligations = tuple(entity_id for entity_id in obligations if entity_id not in addressed)
+    open_obligations = _open_obligation_ids(context, workstream_id, primary_id)
     precise = [
         entity_by_id[entity_id]
         for entity_id in linked
@@ -454,18 +530,38 @@ def choose_next_operation(
     ]
     precise.sort(
         key=lambda entity: (
-            {"ProofAttempt": 0, "Lemma": 1, "Theorem": 2, "Technique": 3}.get(
+            {"Lemma": 0, "Theorem": 1, "Technique": 2, "ProofAttempt": 3}.get(
                 entity["entity_type"], 4
             ),
             -int(entity["id"]),
         )
     )
+    prove_candidates = [
+        entity
+        for entity in precise
+        if entity["entity_type"] != "ProofAttempt"
+        and not _completed_for_target(history, "prove", int(entity["id"]))
+    ]
 
     if open_obligations:
+        relevant_unattacked = _relevant_unattacked_proof_attempts(
+            context, history, open_obligations
+        )
+        if relevant_unattacked:
+            target_id = int(relevant_unattacked[0]["id"])
+            return OperationChoice(
+                operation="attack",
+                target_entity_id=target_id,
+                open_obligation_ids=open_obligations,
+                rationale=(
+                    f"Proof attempt #{target_id} is linked to a currently open obligation "
+                    "and has not yet received one bounded adversarial attack."
+                ),
+            )
         obligation_id = open_obligations[0]
         consumed = _relevant_synthesis_inputs(context, workstream_id, obligation_id)
-        if len(consumed) >= 2 and not _completed_for_target(
-            history, "synthesize", obligation_id
+        if len(consumed) >= 2 and _is_new_synthesis_input_set(
+            history, obligation_id, consumed
         ):
             return OperationChoice(
                 operation="synthesize",
@@ -477,8 +573,8 @@ def choose_next_operation(
                     "non-terminal artifacts that can be combined in one bounded synthesis."
                 ),
             )
-        if precise:
-            candidate_id = int(precise[0]["id"])
+        if prove_candidates:
+            candidate_id = int(prove_candidates[0]["id"])
             return OperationChoice(
                 operation="prove",
                 target_entity_id=candidate_id,
@@ -527,18 +623,16 @@ def choose_next_operation(
                 ),
             )
 
-    unproved = [
+    non_primary_prove_candidates = [
         entity
-        for entity in precise
-        if entity["entity_type"] != "ProofAttempt"
-        and not _completed_for_target(history, "prove", int(entity["id"]))
-        and not (
+        for entity in prove_candidates
+        if not (
             int(entity["id"]) == primary_id
             and primary["entity_type"] in PRECISE_ENTITY_TYPES
         )
     ]
-    if unproved:
-        target_id = int(unproved[0]["id"])
+    if non_primary_prove_candidates:
+        target_id = int(non_primary_prove_candidates[0]["id"])
         return OperationChoice(
             operation="prove",
             target_entity_id=target_id,
@@ -574,15 +668,60 @@ def _operation_instructions(choice: OperationChoice) -> str:
     if choice.operation == "synthesize":
         consumed = ", ".join(f"#{value}" for value in choice.consumed_entity_ids)
         return (
-            f"Consume all of these existing candidate artifacts: {consumed}. Combine them to "
-            f"attempt to close the specific obligation #{choice.target_entity_id}. If the "
-            "combination fails, emit a failed_approach or obstruction with the exact failure."
+            f"Consume all selected artifacts ({consumed}) and attempt to close obligation "
+            f"#{choice.target_entity_id}. If you produce a concrete candidate proof, emit a "
+            "lemma or proof_attempt referencing the obligation and every consumed artifact, "
+            f"and list #{choice.target_entity_id} in addressed_obligation_ids. Otherwise leave "
+            "addressed_obligation_ids empty and emit a failed_approach or obstruction recording "
+            "the exact missing step."
         )
-    return (
+    instruction = (
         "Turn this precise candidate statement into a rigorous stepwise proof attempt. Expose "
         "every new obligation. Any addressed obligation must appear in the proof artifact's "
         "related_entity_ids. If the proof fails, persist the exact failed approach or blocker."
     )
+    if choice.open_obligation_ids:
+        instruction += (
+            " Because obligations remain open, this prove pass must make a concrete transition: "
+            "address an open obligation with a lemma or proof_attempt, expose a new "
+            "proof_obligation, or emit a counterexample, obstruction, or failed_approach. "
+            "A free-standing proof_attempt that leaves every open obligation unchanged is not "
+            "progress."
+        )
+    return instruction
+
+
+def _synthesis_output_instructions(
+    choice: OperationChoice, required_artifact_related_entity_ids: list[int]
+) -> str:
+    if choice.operation != "synthesize":
+        return ""
+    required_refs = json.dumps(required_artifact_related_entity_ids)
+    return f'''SYNTHESIS OUTPUT RULES
+The selected target obligation is #{choice.target_entity_id}.
+
+REFERENCE RULES
+- EVERY artifact emitted by this synthesis operation MUST include EVERY controller-selected
+  consumed entity ID AND the target obligation ID in related_entity_ids.
+- The minimum required related_entity_ids are exactly: {required_refs}. Additional in-context
+  entity IDs may be included only when materially relevant.
+- This applies to successful synthesis artifacts AND failed_approach or obstruction artifacts.
+  Do not merely put consumed IDs in top-level consumed_entity_ids; they must also occur in each
+  artifact.related_entity_ids.
+
+SUCCESS CASE
+- If this synthesis produces a concrete candidate argument intended to address obligation
+  #{choice.target_entity_id}, emit a lemma or proof_attempt.
+- That proof artifact must include #{choice.target_entity_id} and every controller-selected
+  consumed entity ID in related_entity_ids.
+- Then and only then include #{choice.target_entity_id} in addressed_obligation_ids.
+
+FAILURE / PARTIAL-PROGRESS CASE
+- If the consumed artifacts cannot yet produce a concrete lemma or proof_attempt closing the
+  obligation, set addressed_obligation_ids to [].
+- Emit an obstruction or failed_approach containing every required synthesis reference and
+  describe the exact missing step or contradiction.
+- Do not call partial progress "addressed".'''
 
 
 def _research_prompt(
@@ -601,6 +740,13 @@ def _research_prompt(
         )
         attack_outcome_example = "not_applicable"
     required_consumed_entity_ids = list(choice.consumed_entity_ids)
+    required_artifact_related_entity_ids = list(
+        dict.fromkeys(
+            [*choice.consumed_entity_ids, choice.target_entity_id]
+            if choice.operation == "synthesize"
+            else [choice.target_entity_id]
+        )
+    )
     if choice.operation == "synthesize":
         consumed_entity_instruction = (
             "- For synthesize, consumed_entity_ids MUST contain exactly the controller-selected "
@@ -611,12 +757,16 @@ def _research_prompt(
         consumed_entity_instruction = (
             "- For non-synthesis operations, consumed_entity_ids MUST be []."
         )
+    operation_output_instructions = _synthesis_output_instructions(
+        choice, required_artifact_related_entity_ids
+    )
     decision = {
         "operation": choice.operation,
         "target_entity_id": choice.target_entity_id,
         "primary_entity_id": int(primary["id"]),
         "rationale": choice.rationale,
         "required_consumed_entity_ids": choice.consumed_entity_ids,
+        "required_artifact_related_entity_ids": required_artifact_related_entity_ids,
         "currently_open_obligation_ids": choice.open_obligation_ids,
     }
     return f'''You are executing one bounded operation in a human-directed theoretical-research workbench.
@@ -637,12 +787,27 @@ EPISTEMIC AND WRITE RULES
 - Keep each reasoning_summary concise and technical rather than essay-length.
 - Do not restate an existing entity or existing material_key. Rephrasing is not progress.
 - Every artifact must reference the selected target in related_entity_ids.
-- addressed_obligation_ids means a concrete candidate argument was produced; it does not mean
-  the obligation was human-verified or mathematically resolved.
 - Set human_judgment_required only when a scientific choice cannot responsibly be made from
   this graph state.
 {attack_outcome_instruction}
 {consumed_entity_instruction}
+{operation_output_instructions}
+
+ADDRESSED OBLIGATION RULES
+- addressed_obligation_ids is a strong claim about what THIS response produced.
+- You may include obligation ID X in addressed_obligation_ids ONLY if THIS response also emits
+  at least one artifact with artifact_type lemma or proof_attempt and X appears in that
+  artifact's related_entity_ids.
+- A synthesis, finding, parameter_analysis, protocol_component, consequence, obstruction, or
+  failed_approach does NOT by itself count as addressing an obligation.
+- Discussing an obligation, narrowing it, combining evidence about it, or identifying a possible
+  route does NOT count as addressing it.
+- If this operation does not produce a concrete lemma or proof_attempt for X, omit X from
+  addressed_obligation_ids.
+- If no obligation is concretely addressed, return "addressed_obligation_ids": [].
+- Never claim an obligation is addressed merely because it is the selected target.
+- addressed_obligation_ids does not mean the obligation was human-verified or mathematically
+  resolved.
 
 BRANCH STATUS RULES
 - "blocked" is legal ONLY for obstruction or failed_approach.
@@ -674,7 +839,7 @@ Return ONLY strict JSON with exactly this shape:
       "reasoning_summary": "derivation, argument, calculation, or exact failure point",
       "material_key": "stable_lowercase_concept_key",
       "epistemic_status": "inference|speculation|unresolved",
-      "related_entity_ids": [{choice.target_entity_id}],
+      "related_entity_ids": {json.dumps(required_artifact_related_entity_ids)},
       "source_ids": [],
       "branch_status": null
     }}
@@ -686,6 +851,26 @@ Return ONLY strict JSON with exactly this shape:
   "human_judgment_required": false,
   "human_judgment_reason": null
 }}'''
+
+
+def _has_meaningful_open_obligation_transition(
+    artifacts: Sequence[ResearchArtifact],
+    addressed_obligation_ids: Sequence[int],
+    open_obligation_ids: Sequence[int],
+) -> bool:
+    open_ids = set(open_obligation_ids)
+    addressed_open_ids = open_ids & set(addressed_obligation_ids)
+    if addressed_open_ids and any(
+        artifact.artifact_type in PROOF_ARTIFACT_TYPES
+        and addressed_open_ids & set(artifact.related_entity_ids)
+        for artifact in artifacts
+    ):
+        return True
+    return any(
+        artifact.artifact_type
+        in {"proof_obligation", "counterexample", "obstruction", "failed_approach"}
+        for artifact in artifacts
+    )
 
 
 def _validate_step_report(
@@ -789,8 +974,19 @@ def _validate_step_report(
                 "An unsuccessful synthesis must persist a failed approach or obstruction."
             )
 
-    if choice.operation == "prove" and not report.artifacts:
-        raise ModelOutputError("Prove must persist a proof attempt, obligation, or failure.")
+    if choice.operation == "prove":
+        if not report.artifacts:
+            raise ModelOutputError("Prove must persist a proof attempt, obligation, or failure.")
+        if choice.open_obligation_ids and not _has_meaningful_open_obligation_transition(
+            report.artifacts,
+            report.addressed_obligation_ids,
+            choice.open_obligation_ids,
+        ):
+            raise ModelOutputError(
+                "Prove with open obligations must address one with a lemma/proof attempt, "
+                "create a new proof obligation, or record a counterexample, obstruction, "
+                "or failed approach."
+            )
     if choice.operation == "develop" and not report.artifacts:
         raise ModelOutputError("Develop must propose at least one substantive artifact.")
 
@@ -961,6 +1157,12 @@ def _persist_step(
             )
 
         material_progress = bool(artifact_ids)
+        if choice.operation == "prove" and choice.open_obligation_ids:
+            material_progress = _has_meaningful_open_obligation_transition(
+                [artifact for artifact, _ in accepted],
+                report.addressed_obligation_ids,
+                choice.open_obligation_ids,
+            )
         con.execute(
             """
             UPDATE research_iterations
@@ -1010,8 +1212,8 @@ def _start_iteration(workstream_id: int, choice: OperationChoice) -> int:
             """
             INSERT INTO research_iterations(
                 project_id,workstream_id,iteration_number,operation,target_entity_id,
-                rationale,status,created_at
-            ) VALUES(1,?,?,?,?,?,'running',?)
+                rationale,consumed_entity_ids_json,status,created_at
+            ) VALUES(1,?,?,?,?,?,?,'running',?)
             """,
             (
                 workstream_id,
@@ -1019,6 +1221,7 @@ def _start_iteration(workstream_id: int, choice: OperationChoice) -> int:
                 choice.operation,
                 choice.target_entity_id,
                 choice.rationale,
+                json.dumps(choice.consumed_entity_ids),
                 utcnow(),
             ),
         )
@@ -1233,13 +1436,8 @@ def research(
         if (
             choice.operation == "attack"
             and report.attack_outcome == "no_critical_issue"
-            and not (
-                set(
-                    _obligation_ids(
-                        context_after, workstream_id, int(primary["id"])
-                    )
-                )
-                - _addressed_obligation_ids(context_after)
+            and not _open_obligation_ids(
+                context_after, workstream_id, int(primary["id"])
             )
         ):
             _finalize(
@@ -1293,12 +1491,22 @@ def research(
                 "blocked",
             )
 
+    final_context = for_workstream(workstream_id)
+    remaining_obligations = _open_obligation_ids(
+        final_context, workstream_id, int(primary["id"])
+    )
+    detail = f"The configured limit of {max_calls} model call(s) was reached."
+    if remaining_obligations:
+        count = len(remaining_obligations)
+        noun = "proof obligation" if count == 1 else "proof obligations"
+        verb = "remains" if count == 1 else "remain"
+        detail += f" {count} {noun} {verb} open."
     _finalize(
         workstream_id=workstream_id,
         iteration_id=last_iteration_id,
         status="completed",
         stop_reason="max_calls_exhausted",
-        detail=f"The configured limit of {max_calls} model call(s) was reached.",
+        detail=detail,
     )
     return ResearchOutcome(
         workstream_id,
