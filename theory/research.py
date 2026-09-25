@@ -106,32 +106,48 @@ def _positive_unique_ids(values: list[int]) -> list[int]:
     return values
 
 
+ArtifactType = Literal[
+    "consequence",
+    "lemma",
+    "protocol_component",
+    "parameter_analysis",
+    "proof_obligation",
+    "open_question",
+    "proof_attempt",
+    "synthesis",
+    "counterexample",
+    "obstruction",
+    "failed_approach",
+    "finding",
+]
+GeneralArtifactType = Literal[
+    "consequence",
+    "lemma",
+    "protocol_component",
+    "parameter_analysis",
+    "proof_obligation",
+    "open_question",
+    "proof_attempt",
+    "synthesis",
+    "counterexample",
+    "finding",
+]
+BranchStatus = Literal[
+    "promising", "blocked", "failed", "refuted", "unresolved"
+] | None
+
+
 class ResearchArtifact(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    artifact_type: Literal[
-        "consequence",
-        "lemma",
-        "protocol_component",
-        "parameter_analysis",
-        "proof_obligation",
-        "open_question",
-        "proof_attempt",
-        "synthesis",
-        "counterexample",
-        "obstruction",
-        "failed_approach",
-        "finding",
-    ]
+    artifact_type: ArtifactType
     statement: str = Field(min_length=1, max_length=2_000)
     reasoning_summary: str = Field(min_length=1, max_length=5_000)
     material_key: str = Field(pattern=r"^[a-z0-9][a-z0-9_]{2,79}$")
     epistemic_status: Literal["inference", "speculation", "unresolved"]
     related_entity_ids: list[int] = Field(min_length=1, max_length=24)
     source_ids: list[int] = Field(default_factory=list, max_length=20)
-    branch_status: Literal[
-        "promising", "blocked", "failed", "refuted", "unresolved"
-    ] | None
+    branch_status: BranchStatus
 
     @field_validator("statement", "reasoning_summary")
     @classmethod
@@ -155,13 +171,35 @@ class ResearchArtifact(BaseModel):
         return self
 
 
+class GeneralResearchArtifact(ResearchArtifact):
+    artifact_type: GeneralArtifactType
+    branch_status: Literal["promising", "unresolved"] | None
+
+
+class ObstructionResearchArtifact(ResearchArtifact):
+    artifact_type: Literal["obstruction"]
+    branch_status: Literal["promising", "blocked", "unresolved"] | None
+
+
+class FailedApproachResearchArtifact(ResearchArtifact):
+    artifact_type: Literal["failed_approach"]
+    branch_status: BranchStatus
+
+
+ResearchArtifactVariant = (
+    GeneralResearchArtifact
+    | ObstructionResearchArtifact
+    | FailedApproachResearchArtifact
+)
+
+
 class ResearchStepReport(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     operation: Literal["develop", "attack", "synthesize", "prove"]
     target_entity_id: int = Field(gt=0)
     summary: str = Field(min_length=1, max_length=4_000)
-    artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
+    artifacts: list[ResearchArtifactVariant] = Field(default_factory=list, max_length=4)
     consumed_entity_ids: list[int] = Field(default_factory=list, max_length=8)
     addressed_obligation_ids: list[int] = Field(default_factory=list, max_length=12)
     attack_outcome: Literal[
@@ -605,6 +643,18 @@ EPISTEMIC AND WRITE RULES
   this graph state.
 {attack_outcome_instruction}
 {consumed_entity_instruction}
+
+BRANCH STATUS RULES
+- "blocked" is legal ONLY for obstruction or failed_approach.
+- "failed" and "refuted" are legal ONLY for failed_approach.
+- For parameter_analysis, lemma, finding, consequence, protocol_component, proof_obligation,
+  open_question, proof_attempt, synthesis, and counterexample, branch_status must be
+  "promising", "unresolved", or null.
+- If a substantive artifact discovers a blocker, do NOT mark that substantive artifact blocked.
+  Emit it with null or "unresolved" as appropriate AND emit a separate obstruction artifact
+  with branch_status="blocked".
+- If an approach itself failed or was refuted, represent that failure as a failed_approach
+  artifact rather than assigning "failed" or "refuted" to another artifact type.
 
 CONTROLLER DECISION
 {json.dumps(decision, indent=2, sort_keys=True)}

@@ -17,6 +17,7 @@ from theory.models import ModelResult
 from theory.research import (
     OperationChoice,
     RESEARCH_MAX_OUTPUT_TOKENS,
+    ResearchArtifact,
     ResearchStepReport,
     _research_prompt,
     _validate_step_report,
@@ -203,6 +204,133 @@ def test_research_prompt_and_schema_bound_artifact_output():
         ResearchStepReport.model_json_schema()["properties"]["artifacts"]["maxItems"]
         == 4
     )
+
+
+def test_research_prompt_explains_branch_status_compatibility():
+    prompt = _research_prompt(
+        MinimalResearchContext(),
+        {"id": 1},
+        OperationChoice("develop", 1, "Regression test"),
+    )
+
+    assert "BRANCH STATUS RULES" in prompt
+    assert '"blocked" is legal ONLY for obstruction or failed_approach' in prompt
+    assert '"failed" and "refuted" are legal ONLY for failed_approach' in prompt
+    assert "do NOT mark that substantive artifact blocked" in prompt
+    assert "emit a separate obstruction artifact" in prompt
+    assert "represent that failure as a failed_approach" in prompt
+
+
+def report_with_artifact_status(artifact_type, branch_status):
+    decision = {
+        "operation": "develop",
+        "target_entity_id": 1,
+        "required_consumed_entity_ids": [],
+    }
+    return ResearchStepReport.model_validate(
+        step_report(
+            decision,
+            [
+                artifact(
+                    artifact_type,
+                    f"Artifact of type {artifact_type} for branch-status validation.",
+                    f"{artifact_type}_branch_status_validation",
+                    [1],
+                    branch_status=branch_status,
+                )
+            ],
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "branch_status"),
+    [
+        ("parameter_analysis", "blocked"),
+        ("obstruction", "failed"),
+    ],
+)
+def test_artifact_union_rejects_incompatible_branch_status(
+    artifact_type, branch_status
+):
+    with pytest.raises(ValueError):
+        report_with_artifact_status(artifact_type, branch_status)
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "branch_status"),
+    [
+        ("parameter_analysis", "unresolved"),
+        ("parameter_analysis", None),
+        ("obstruction", "blocked"),
+        ("failed_approach", "blocked"),
+        ("failed_approach", "failed"),
+        ("failed_approach", "refuted"),
+    ],
+)
+def test_artifact_union_accepts_compatible_branch_status(
+    artifact_type, branch_status
+):
+    parsed = report_with_artifact_status(artifact_type, branch_status).artifacts[0]
+
+    assert isinstance(parsed, ResearchArtifact)
+    assert parsed.artifact_type == artifact_type
+    assert parsed.branch_status == branch_status
+
+
+def test_research_artifact_base_keeps_defensive_branch_status_validator():
+    payload = artifact(
+        "parameter_analysis",
+        "A parameter analysis that reveals a separate blocker.",
+        "defensive_branch_status_validation",
+        [1],
+        branch_status="blocked",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="blocked branches must be obstruction or failed_approach artifacts",
+    ):
+        ResearchArtifact.model_validate(payload)
+
+
+def test_substantive_artifact_plus_separate_blocked_obstruction_validates():
+    decision = {
+        "operation": "develop",
+        "target_entity_id": 1,
+        "required_consumed_entity_ids": [],
+    }
+    report = ResearchStepReport.model_validate(
+        step_report(
+            decision,
+            [
+                artifact(
+                    "parameter_analysis",
+                    "The threshold inequality fails in the boundary regime.",
+                    "boundary_threshold_analysis",
+                    [1],
+                    branch_status="unresolved",
+                ),
+                artifact(
+                    "obstruction",
+                    "The boundary regime blocks the proposed construction.",
+                    "boundary_regime_obstruction",
+                    [1],
+                    branch_status="blocked",
+                ),
+            ],
+        )
+    )
+
+    _validate_step_report(
+        report,
+        MinimalResearchContext(),
+        OperationChoice("develop", 1, "Regression test"),
+    )
+    assert [item.artifact_type for item in report.artifacts] == [
+        "parameter_analysis",
+        "obstruction",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -887,10 +1015,18 @@ def test_anthropic_research_keeps_json_parsing_path(monkeypatch, tmp_path):
             decision,
             [
                 artifact(
-                    "finding",
-                    "A concise Anthropic-backed controller finding.",
-                    "anthropic_json_path_finding",
+                    "parameter_analysis",
+                    "The parameter boundary exposes a separate blocker.",
+                    "anthropic_parameter_analysis",
                     [target],
+                    branch_status="unresolved",
+                ),
+                artifact(
+                    "obstruction",
+                    "The exposed boundary blocks this construction.",
+                    "anthropic_blocked_obstruction",
+                    [target],
+                    branch_status="blocked",
                 )
             ],
         )
@@ -902,6 +1038,18 @@ def test_anthropic_research_keeps_json_parsing_path(monkeypatch, tmp_path):
 
     assert outcome.calls_made == 1
     assert provider.calls[0]["response_model"] is None
+    with connect() as con:
+        branch_statuses = con.execute(
+            """
+            SELECT a.value FROM workstream_entities we
+            JOIN entity_attributes a ON a.entity_id=we.entity_id
+            WHERE we.workstream_id=? AND we.role='created'
+              AND a.key='research_branch_status'
+            ORDER BY a.entity_id
+            """,
+            (workstream,),
+        ).fetchall()
+    assert [row["value"] for row in branch_statuses] == ["unresolved", "blocked"]
 
 
 def test_reactivated_research_retries_operation_after_errored_iteration(

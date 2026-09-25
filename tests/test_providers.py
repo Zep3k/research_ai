@@ -96,6 +96,36 @@ def test_openai_adapter_uses_strict_schema_for_complete_research_report():
     assert output_format["strict"] is True
     assert output_format["name"] == "ResearchStepReport"
     assert output_format["schema"]["additionalProperties"] is False
+    artifact_schema = output_format["schema"]["properties"]["artifacts"]["items"]
+    assert "anyOf" in artifact_schema
+    assert "oneOf" not in artifact_schema
+    variant_names = {
+        item["$ref"].rsplit("/", 1)[-1] for item in artifact_schema["anyOf"]
+    }
+    assert variant_names == {
+        "GeneralResearchArtifact",
+        "ObstructionResearchArtifact",
+        "FailedApproachResearchArtifact",
+    }
+    definitions = output_format["schema"]["$defs"]
+
+    def branch_statuses(name):
+        alternatives = definitions[name]["properties"]["branch_status"]["anyOf"]
+        return next(set(item["enum"]) for item in alternatives if "enum" in item)
+
+    assert branch_statuses("GeneralResearchArtifact") == {"promising", "unresolved"}
+    assert branch_statuses("ObstructionResearchArtifact") == {
+        "promising",
+        "blocked",
+        "unresolved",
+    }
+    assert branch_statuses("FailedApproachResearchArtifact") == {
+        "promising",
+        "blocked",
+        "failed",
+        "refuted",
+        "unresolved",
+    }
     assert parse_json_model(result.text, ResearchStepReport).operation == "attack"
 
 
