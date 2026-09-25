@@ -72,17 +72,19 @@ def _start_call(
     purpose: str,
     *,
     estimated_max_cost_usd: float,
+    workstream_id: int | None = None,
 ) -> int:
     with connect() as con:
         cur = con.execute(
             """
             INSERT INTO api_calls(
-                run_id,provider,model,purpose,input_tokens,output_tokens,cost_usd,
+                run_id,workstream_id,provider,model,purpose,input_tokens,output_tokens,cost_usd,
                 estimated_max_cost_usd,status,error_message,response_text,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_id,
+                workstream_id,
                 provider,
                 model,
                 purpose,
@@ -131,6 +133,7 @@ def _call_model(
     prompt: str,
     max_output_tokens: int,
     estimated_max_cost_usd: float,
+    workstream_id: int | None = None,
 ) -> ModelResult:
     call_id = _start_call(
         run_id,
@@ -138,6 +141,7 @@ def _call_model(
         model,
         purpose,
         estimated_max_cost_usd=estimated_max_cost_usd,
+        workstream_id=workstream_id,
     )
     try:
         result = provider.complete(

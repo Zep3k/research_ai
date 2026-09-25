@@ -12,3 +12,7 @@ class BudgetExceededError(TheoryError):
 
 class ModelOutputError(TheoryError):
     """A provider returned output that cannot be used safely."""
+
+
+class TrustError(TheoryError):
+    """A research write would violate an epistemic trust rule."""

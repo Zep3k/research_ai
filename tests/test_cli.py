@@ -75,3 +75,41 @@ def test_local_cli_flow_without_paid_calls(monkeypatch, tmp_path):
     assert "Retrieved Literature" in result.output
     assert "A Nearby Result" in result.output
     assert "sourced; sources: S1" in result.output
+
+
+def test_graph_cli_and_deterministic_delta(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    assert runner.invoke(app, ["init", "Delta demo"]).exit_code == 0
+
+    result = runner.invoke(app, ["entity", "add", "theorem", "Known result"])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(app, ["entity", "add", "conjecture", "Possible improvement"])
+    assert result.exit_code == 0, result.output
+
+    commands = [
+        ["attr", "set", "1", "synchrony", "asynchronous"],
+        ["attr", "set", "2", "synchrony", "asynchronous"],
+        ["attr", "set", "1", "communication", "O(n^3)"],
+        ["attr", "set", "2", "communication", "O(n^2)"],
+        ["relation", "add", "2", "EXTENDS", "1"],
+        ["workstream", "create", "attack", "Try to refute conjecture #2"],
+        ["workstream", "link", "1", "2", "input"],
+        ["workstream", "status", "1", "failed", "--summary", "No refutation found."],
+    ]
+    for command in commands:
+        result = runner.invoke(app, command)
+        assert result.exit_code == 0, result.output
+
+    result = runner.invoke(app, ["delta", "1", "2"])
+    assert result.exit_code == 0, result.output
+    assert "UNCHANGED" in result.output
+    assert "synchrony = asynchronous" in result.output
+    assert "CHANGED" in result.output
+    assert "A = O(n^3)" in result.output
+    assert "B = O(n^2)" in result.output
+
+    result = runner.invoke(app, ["workstream", "show", "1"])
+    assert result.exit_code == 0, result.output
+    assert "failed" in result.output
+    assert "No refutation found." in result.output

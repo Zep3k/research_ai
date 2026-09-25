@@ -10,17 +10,43 @@ from rich.text import Text
 from .config import Config
 from .db import connect, initialize, monthly_spend, utcnow
 from .errors import TheoryError
+from .graph import (
+    add_entity,
+    add_relation,
+    add_review,
+    add_source,
+    compare_attributes,
+    create_workstream,
+    link_workstream_entity,
+    list_attributes,
+    set_attribute,
+    set_entity_trust,
+    set_workstream_status,
+)
 from .papers import import_pdf
 from .paths import STATE_DIR, PAPERS_DIR, require_workspace
+from .trust import EntityType, parse_enum
 from .workflows import investigate as run_investigation
 
 app = typer.Typer(no_args_is_help=True, help="Local theoretical-research workbench.")
 idea_app = typer.Typer(no_args_is_help=True)
 paper_app = typer.Typer(no_args_is_help=True)
 run_app = typer.Typer(no_args_is_help=True)
+entity_app = typer.Typer(no_args_is_help=True)
+attr_app = typer.Typer(no_args_is_help=True)
+relation_app = typer.Typer(no_args_is_help=True)
+source_app = typer.Typer(no_args_is_help=True)
+workstream_app = typer.Typer(no_args_is_help=True)
+review_app = typer.Typer(no_args_is_help=True)
 app.add_typer(idea_app, name="idea")
 app.add_typer(paper_app, name="paper")
 app.add_typer(run_app, name="run")
+app.add_typer(entity_app, name="entity")
+app.add_typer(attr_app, name="attr")
+app.add_typer(relation_app, name="relation")
+app.add_typer(source_app, name="source")
+app.add_typer(workstream_app, name="workstream")
+app.add_typer(review_app, name="review")
 console = Console()
 
 
@@ -52,7 +78,14 @@ def idea_add(statement: str, notes: str = ""):
             (statement, notes, utcnow()),
         )
         idea_id = int(cur.lastrowid)
-    console.print(f"Added idea [bold]#{idea_id}[/bold]: {escape(statement)}")
+        entity_id = add_entity(con, "ResearchIdea", statement, body=notes)
+        con.execute(
+            "INSERT INTO legacy_entity_links VALUES(1,'ideas',?,?)", (idea_id, entity_id)
+        )
+    console.print(
+        f"Added idea [bold]#{idea_id}[/bold] as entity [bold]#{entity_id}[/bold]: "
+        f"{escape(statement)}"
+    )
 
 
 @idea_app.command("list")
@@ -99,7 +132,16 @@ def paper_add(path: Path, title: str | None = None):
                 paper_id,
             ),
         )
-    console.print(f"Added paper [bold]#{paper_id}[/bold]: {escape(title)}")
+        entity_id = add_entity(
+            con, "Paper", title, body=f"Local PDF: {imported.pdf_path}"
+        )
+        con.execute(
+            "INSERT INTO legacy_entity_links VALUES(1,'papers',?,?)", (paper_id, entity_id)
+        )
+    console.print(
+        f"Added paper [bold]#{paper_id}[/bold] as entity [bold]#{entity_id}[/bold]: "
+        f"{escape(title)}"
+    )
 
 
 @paper_app.command("list")
@@ -206,6 +248,416 @@ def budget():
         f"Estimated API spend this month: [bold]${spent:.2f}[/bold] / "
         f"${cfg.monthly_budget_usd:.2f} ({pct:.1f}%)"
     )
+
+
+@entity_app.command("add")
+def entity_add(
+    entity_type: str,
+    title: str,
+    body: str = typer.Option("", help="Longer statement or notes."),
+    status: str = typer.Option("active"),
+    trust_state: str = typer.Option("unverified", "--trust-state"),
+    confidence: float = typer.Option(0.0, min=0.0, max=1.0),
+    source: list[int] | None = typer.Option(None, "--source", help="Existing source ID."),
+):
+    """Create a typed research object."""
+    require_workspace()
+    with connect() as con:
+        entity_id = add_entity(
+            con,
+            entity_type,
+            title,
+            body=body,
+            status=status,
+            trust_state=trust_state,
+            confidence=confidence,
+            source_ids=source or (),
+        )
+        entity = con.execute("SELECT entity_type FROM entities WHERE id=?", (entity_id,)).fetchone()
+    console.print(
+        f"Added {escape(entity['entity_type'])} [bold]#{entity_id}[/bold]: {escape(title.strip())}"
+    )
+
+
+@entity_app.command("list")
+def entity_list(entity_type: str | None = typer.Option(None, "--type")):
+    """List research objects."""
+    require_workspace()
+    params: tuple[str, ...] = ()
+    where = ""
+    if entity_type is not None:
+        parsed = parse_enum(EntityType, entity_type, "entity type")
+        where = "WHERE entity_type=?"
+        params = (parsed.value,)
+    with connect() as con:
+        rows = con.execute(
+            f"SELECT id,entity_type,status,trust_state,title FROM entities {where} ORDER BY id",
+            params,
+        ).fetchall()
+    table = Table("ID", "Type", "Status", "Trust", "Title")
+    for row in rows:
+        table.add_row(
+            str(row["id"]),
+            Text(row["entity_type"]),
+            Text(row["status"]),
+            Text(row["trust_state"]),
+            Text(row["title"]),
+        )
+    console.print(table)
+
+
+@entity_app.command("show")
+def entity_show(entity_id: int):
+    """Show an entity, its attributes, provenance, and direct relations."""
+    require_workspace()
+    with connect() as con:
+        entity = con.execute("SELECT * FROM entities WHERE id=?", (entity_id,)).fetchone()
+        if entity is None:
+            raise TheoryError(f"Entity #{entity_id} does not exist.")
+        attrs = con.execute(
+            "SELECT key,value FROM entity_attributes WHERE entity_id=? ORDER BY key", (entity_id,)
+        ).fetchall()
+        sources = con.execute(
+            """
+            SELECT s.* FROM entity_sources es JOIN sources s ON s.id=es.source_id
+            WHERE es.entity_id=? ORDER BY s.id
+            """,
+            (entity_id,),
+        ).fetchall()
+        relations = con.execute(
+            """
+            SELECT * FROM relations
+            WHERE source_entity_id=? OR target_entity_id=? ORDER BY id
+            """,
+            (entity_id, entity_id),
+        ).fetchall()
+    console.print(
+        Panel(
+            f"{escape(entity['entity_type'])} | status: {escape(entity['status'])} | "
+            f"trust: {escape(entity['trust_state'])} | confidence: {entity['confidence']:.2f}\n\n"
+            f"{escape(entity['body'])}",
+            title=f"Entity #{entity_id}: {escape(entity['title'])}",
+        )
+    )
+    if attrs:
+        console.print("[bold]Attributes[/bold]")
+        for row in attrs:
+            console.print(f"  {escape(row['key'])} = {escape(row['value'])}")
+    if sources:
+        console.print("[bold]Sources[/bold]")
+        for row in sources:
+            locator = row["theorem"] or row["section"] or row["external_url"] or ""
+            page = f" page {row['page']}" if row["page"] else ""
+            console.print(f"  #{row['id']}{page} {escape(locator)}")
+    if relations:
+        console.print("[bold]Relations[/bold]")
+        for row in relations:
+            console.print(
+                f"  #{row['id']} {row['source_entity_id']} {row['relation_type']} "
+                f"{row['target_entity_id']} [{row['trust_state']}]"
+            )
+
+
+@entity_app.command("trust")
+def entity_trust(entity_id: int, trust_state: str):
+    """Explicitly change an entity's epistemic state."""
+    require_workspace()
+    with connect() as con:
+        set_entity_trust(con, entity_id, trust_state)
+    console.print(f"Entity #{entity_id} trust state set to {escape(trust_state)}.")
+
+
+@attr_app.command("set")
+def attr_set(entity_id: int, key: str, value: str):
+    """Set a generic structured attribute on an entity."""
+    require_workspace()
+    with connect() as con:
+        set_attribute(con, entity_id, key, value)
+    console.print(f"Set entity #{entity_id}: {escape(key)} = {escape(value)}")
+
+
+@attr_app.command("list")
+def attr_list(entity_id: int):
+    require_workspace()
+    with connect() as con:
+        attrs = list_attributes(con, entity_id)
+    table = Table("Key", "Value")
+    for key, value in attrs.items():
+        table.add_row(Text(key), Text(value))
+    console.print(table)
+
+
+@relation_app.command("add")
+def relation_add(
+    source_entity_id: int,
+    relation_type: str,
+    target_entity_id: int,
+    evidence_source: int | None = typer.Option(None, "--evidence-source"),
+    trust_state: str = typer.Option("unverified", "--trust-state"),
+    confidence: float = typer.Option(0.0, min=0.0, max=1.0),
+):
+    """Create a validated directed relation."""
+    require_workspace()
+    with connect() as con:
+        relation_id = add_relation(
+            con,
+            source_entity_id,
+            relation_type,
+            target_entity_id,
+            evidence_source_id=evidence_source,
+            trust_state=trust_state,
+            confidence=confidence,
+        )
+        relation = con.execute(
+            "SELECT relation_type FROM relations WHERE id=?", (relation_id,)
+        ).fetchone()
+    console.print(
+        f"Added relation [bold]#{relation_id}[/bold]: {source_entity_id} "
+        f"{relation['relation_type']} {target_entity_id}"
+    )
+
+
+@relation_app.command("list")
+def relation_list(entity_id: int | None = None):
+    require_workspace()
+    with connect() as con:
+        if entity_id is None:
+            rows = con.execute("SELECT * FROM relations ORDER BY id").fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT * FROM relations
+                WHERE source_entity_id=? OR target_entity_id=? ORDER BY id
+                """,
+                (entity_id, entity_id),
+            ).fetchall()
+    table = Table("ID", "Source", "Relation", "Target", "Trust", "Evidence")
+    for row in rows:
+        table.add_row(
+            str(row["id"]),
+            str(row["source_entity_id"]),
+            Text(row["relation_type"]),
+            str(row["target_entity_id"]),
+            Text(row["trust_state"]),
+            str(row["evidence_source_id"] or ""),
+        )
+    console.print(table)
+
+
+@source_app.command("add")
+def source_add(
+    entity_id: int,
+    paper: int | None = typer.Option(None, "--paper", help="Paper entity ID."),
+    source_type: str = typer.Option("paper_locator", "--type"),
+    page: int | None = typer.Option(None, min=1),
+    section: str | None = None,
+    theorem: str | None = None,
+    excerpt: str | None = None,
+    external_url: str | None = typer.Option(None, "--external-url"),
+):
+    """Persist and attach a precise provenance locator."""
+    require_workspace()
+    with connect() as con:
+        source_id = add_source(
+            con,
+            entity_id,
+            paper_entity_id=paper,
+            source_type=source_type,
+            page=page,
+            section=section,
+            theorem=theorem,
+            excerpt=excerpt,
+            external_url=external_url,
+        )
+    console.print(f"Added source [bold]#{source_id}[/bold] to entity #{entity_id}.")
+
+
+@source_app.command("list")
+def source_list(entity_id: int | None = None):
+    require_workspace()
+    with connect() as con:
+        if entity_id is None:
+            rows = con.execute(
+                """
+                SELECT NULL AS target_entity_id,s.* FROM sources s ORDER BY s.id
+                """
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """
+                SELECT es.entity_id AS target_entity_id,s.*
+                FROM entity_sources es JOIN sources s ON s.id=es.source_id
+                WHERE es.entity_id=? ORDER BY s.id
+                """,
+                (entity_id,),
+            ).fetchall()
+    table = Table("ID", "Entity", "Paper", "Page", "Section/Theorem", "URL")
+    for row in rows:
+        table.add_row(
+            str(row["id"]),
+            str(row["target_entity_id"] or ""),
+            str(row["paper_entity_id"] or ""),
+            str(row["page"] or ""),
+            Text(row["theorem"] or row["section"] or ""),
+            Text(row["external_url"] or ""),
+        )
+    console.print(table)
+
+
+@workstream_app.command("create")
+def workstream_create(
+    workstream_type: str,
+    goal: str,
+    status: str = typer.Option("active"),
+    summary: str = "",
+):
+    """Create a durable focused research effort."""
+    require_workspace()
+    with connect() as con:
+        workstream_id = create_workstream(
+            con, workstream_type, goal, status=status, summary=summary
+        )
+    console.print(f"Created workstream [bold]#{workstream_id}[/bold]: {escape(goal)}")
+
+
+@workstream_app.command("list")
+def workstream_list():
+    require_workspace()
+    with connect() as con:
+        rows = con.execute("SELECT * FROM workstreams ORDER BY id").fetchall()
+    table = Table("ID", "Type", "Status", "Goal")
+    for row in rows:
+        table.add_row(
+            str(row["id"]), Text(row["workstream_type"]), Text(row["status"]), Text(row["goal"])
+        )
+    console.print(table)
+
+
+@workstream_app.command("show")
+def workstream_show(workstream_id: int):
+    require_workspace()
+    with connect() as con:
+        row = con.execute("SELECT * FROM workstreams WHERE id=?", (workstream_id,)).fetchone()
+        if row is None:
+            raise TheoryError(f"Workstream #{workstream_id} does not exist.")
+        entities = con.execute(
+            """
+            SELECT we.role,e.id,e.entity_type,e.title,e.trust_state
+            FROM workstream_entities we JOIN entities e ON e.id=we.entity_id
+            WHERE we.workstream_id=? ORDER BY e.id,we.role
+            """,
+            (workstream_id,),
+        ).fetchall()
+        reviews = con.execute(
+            "SELECT * FROM reviews WHERE workstream_id=? ORDER BY id", (workstream_id,)
+        ).fetchall()
+    console.print(
+        Panel(
+            f"type: {row['workstream_type']} | status: {row['status']}\n\n"
+            f"{escape(row['summary'])}",
+            title=f"Workstream #{workstream_id}: {escape(row['goal'])}",
+        )
+    )
+    for entity in entities:
+        console.print(
+            f"  [{entity['role']}] #{entity['id']} {entity['entity_type']}: "
+            f"{escape(entity['title'])} ({entity['trust_state']})"
+        )
+    for review in reviews:
+        console.print(f"  review #{review['id']}: {review['review_type']} — {review['result']}")
+
+
+@workstream_app.command("link")
+def workstream_link(
+    workstream_id: int, entity_id: int, role: str = typer.Argument("input")
+):
+    require_workspace()
+    with connect() as con:
+        link_workstream_entity(con, workstream_id, entity_id, role)
+    console.print(f"Linked entity #{entity_id} to workstream #{workstream_id} as {escape(role)}.")
+
+
+@workstream_app.command("status")
+def workstream_status(
+    workstream_id: int,
+    status: str,
+    summary: str | None = typer.Option(None),
+):
+    """Record a terminal state without deleting failed work."""
+    require_workspace()
+    with connect() as con:
+        set_workstream_status(con, workstream_id, status, summary=summary)
+    console.print(f"Workstream #{workstream_id} status set to {escape(status)}.")
+
+
+@review_app.command("add")
+def review_add(
+    review_type: str,
+    result: str,
+    entity: int | None = typer.Option(None, "--entity"),
+    workstream: int | None = typer.Option(None, "--workstream"),
+    issues: str = "",
+    provider: str | None = None,
+    model: str | None = None,
+    run_id: int | None = typer.Option(None, "--run-id"),
+):
+    """Store a bounded review result; 'verified' is deliberately unsupported."""
+    require_workspace()
+    with connect() as con:
+        review_id = add_review(
+            con,
+            review_type,
+            result,
+            target_entity_id=entity,
+            workstream_id=workstream,
+            issues=issues,
+            provider=provider,
+            model=model,
+            run_id=run_id,
+        )
+    console.print(f"Added review [bold]#{review_id}[/bold]: {escape(result)}")
+
+
+@review_app.command("list")
+def review_list():
+    require_workspace()
+    with connect() as con:
+        rows = con.execute("SELECT * FROM reviews ORDER BY id").fetchall()
+    table = Table("ID", "Target", "Type", "Result", "Provider / model")
+    for row in rows:
+        target = (
+            f"entity #{row['target_entity_id']}"
+            if row["target_entity_id"] is not None
+            else f"workstream #{row['workstream_id']}"
+        )
+        provider_model = " / ".join(x for x in (row["provider"], row["model"]) if x)
+        table.add_row(
+            str(row["id"]), target, Text(row["review_type"]), Text(row["result"]), provider_model
+        )
+    console.print(table)
+
+
+@app.command()
+def delta(entity_a: int, entity_b: int):
+    """Deterministically compare attributes of two theorem-like entities."""
+    require_workspace()
+    with connect() as con:
+        result = compare_attributes(con, entity_a, entity_b)
+
+    console.print("[bold]UNCHANGED[/bold]")
+    for key, value in result.unchanged:
+        console.print(f"{escape(key)} = {escape(value)}")
+    console.print("\n[bold]CHANGED[/bold]")
+    for key, value_a, value_b in result.changed:
+        console.print(
+            f"{escape(key)}:\n  A = {escape(value_a)}\n  B = {escape(value_b)}"
+        )
+    console.print("\n[bold]ONLY IN A[/bold]")
+    for key, value in result.only_a:
+        console.print(f"{escape(key)} = {escape(value)}")
+    console.print("\n[bold]ONLY IN B[/bold]")
+    for key, value in result.only_b:
+        console.print(f"{escape(key)} = {escape(value)}")
 
 
 def main() -> None:
