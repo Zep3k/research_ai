@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "theory-research"
+version = "0.1.0"
+description = "A local, provider-independent workbench for theoretical research."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "anthropic>=0.40",
+  "httpx>=0.27",
+  "openai>=1.50",
+  "pydantic>=2.8",
+  "pymupdf>=1.24",
+  "python-dotenv>=1.0",
+  "rich>=13.7",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+theory = "theory.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["theory"]
