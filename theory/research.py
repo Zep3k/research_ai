@@ -551,6 +551,28 @@ def _research_prompt(
     context: ResearchContext, primary: dict, choice: OperationChoice
 ) -> str:
     payload = context.as_model_payload()
+    if choice.operation == "attack":
+        attack_outcome_instruction = (
+            '- For attack, attack_outcome MUST be "critical_issue", "no_critical_issue", or '
+            '"inconclusive"; it MUST NOT be "not_applicable".'
+        )
+        attack_outcome_example = "critical_issue|no_critical_issue|inconclusive"
+    else:
+        attack_outcome_instruction = (
+            '- For non-attack operations, attack_outcome MUST be exactly "not_applicable".'
+        )
+        attack_outcome_example = "not_applicable"
+    required_consumed_entity_ids = list(choice.consumed_entity_ids)
+    if choice.operation == "synthesize":
+        consumed_entity_instruction = (
+            "- For synthesize, consumed_entity_ids MUST contain exactly the controller-selected "
+            f"IDs {json.dumps(required_consumed_entity_ids)}, in any order; do not omit, "
+            "duplicate, or add IDs."
+        )
+    else:
+        consumed_entity_instruction = (
+            "- For non-synthesis operations, consumed_entity_ids MUST be []."
+        )
     decision = {
         "operation": choice.operation,
         "target_entity_id": choice.target_entity_id,
@@ -579,6 +601,8 @@ EPISTEMIC AND WRITE RULES
   the obligation was human-verified or mathematically resolved.
 - Set human_judgment_required only when a scientific choice cannot responsibly be made from
   this graph state.
+{attack_outcome_instruction}
+{consumed_entity_instruction}
 
 CONTROLLER DECISION
 {json.dumps(decision, indent=2, sort_keys=True)}
@@ -603,9 +627,9 @@ Return ONLY strict JSON with exactly this shape:
       "branch_status": null
     }}
   ],
-  "consumed_entity_ids": {json.dumps(list(choice.consumed_entity_ids))},
+  "consumed_entity_ids": {json.dumps(required_consumed_entity_ids)},
   "addressed_obligation_ids": [],
-  "attack_outcome": "not_applicable|critical_issue|no_critical_issue|inconclusive",
+  "attack_outcome": "{attack_outcome_example}",
   "could_not_determine": [],
   "human_judgment_required": false,
   "human_judgment_reason": null
@@ -635,9 +659,22 @@ def _validate_step_report(
             "Research output addressed unknown or non-open obligation IDs: "
             + ", ".join(str(value) for value in sorted(unknown_addressed))
         )
-    if tuple(report.consumed_entity_ids) != choice.consumed_entity_ids:
+    reported_consumed_ids = set(report.consumed_entity_ids)
+    unknown_consumed = reported_consumed_ids - allowed_entity_ids
+    if unknown_consumed:
         raise ModelOutputError(
-            "Research output did not echo the controller's exact consumed_entity_ids."
+            "Research output consumed unknown/out-of-context entity IDs: "
+            + ", ".join(str(value) for value in sorted(unknown_consumed))
+        )
+    if choice.operation == "synthesize":
+        if reported_consumed_ids != set(choice.consumed_entity_ids):
+            raise ModelOutputError(
+                "Research output did not return exactly the controller-selected "
+                "consumed_entity_ids."
+            )
+    elif report.consumed_entity_ids:
+        raise ModelOutputError(
+            "Only synthesize may return non-empty consumed_entity_ids."
         )
     for index, artifact in enumerate(report.artifacts, start=1):
         unknown_entities = set(artifact.related_entity_ids) - allowed_entity_ids

@@ -14,7 +14,13 @@ from theory.graph import (
     set_attribute,
 )
 from theory.models import ModelResult
-from theory.research import research
+from theory.research import (
+    OperationChoice,
+    ResearchStepReport,
+    _research_prompt,
+    _validate_step_report,
+    research,
+)
 
 
 def decision_from_prompt(prompt: str) -> dict:
@@ -107,6 +113,197 @@ def make_research_workstream(entity_type="ResearchIdea", title="Promising direct
         workstream = create_workstream(con, "research", "Advance and test the direction")
         link_workstream_entity(con, workstream, target, "input")
     return workstream, target
+
+
+class MinimalResearchContext:
+    sources = ()
+
+    def __init__(self, *entity_ids):
+        self.entities = tuple({"id": value} for value in (entity_ids or (1,)))
+
+    def as_model_payload(self):
+        return {}
+
+
+@pytest.mark.parametrize("operation", ["develop", "synthesize", "prove"])
+def test_non_attack_prompts_require_not_applicable_attack_outcome(operation):
+    prompt = _research_prompt(
+        MinimalResearchContext(),
+        {"id": 1},
+        OperationChoice(operation, 1, "Regression test"),
+    )
+
+    assert (
+        '- For non-attack operations, attack_outcome MUST be exactly "not_applicable".'
+        in prompt
+    )
+    assert '"attack_outcome": "not_applicable"' in prompt
+    assert "critical_issue|no_critical_issue|inconclusive" not in prompt
+
+
+def test_attack_prompt_excludes_not_applicable_attack_outcome():
+    prompt = _research_prompt(
+        MinimalResearchContext(),
+        {"id": 1},
+        OperationChoice("attack", 1, "Regression test"),
+    )
+
+    assert (
+        'attack_outcome MUST be "critical_issue", "no_critical_issue", or "inconclusive"; '
+        'it MUST NOT be "not_applicable".' in prompt
+    )
+    assert (
+        '"attack_outcome": "critical_issue|no_critical_issue|inconclusive"' in prompt
+    )
+    assert '"attack_outcome": "not_applicable"' not in prompt
+
+
+def test_synthesize_prompt_requires_controller_consumed_ids_in_any_order():
+    prompt = _research_prompt(
+        MinimalResearchContext(1, 2, 3),
+        {"id": 1},
+        OperationChoice(
+            "synthesize",
+            1,
+            "Regression test",
+            consumed_entity_ids=(2, 3),
+        ),
+    )
+
+    assert (
+        "consumed_entity_ids MUST contain exactly the controller-selected IDs [2, 3], "
+        "in any order" in prompt
+    )
+    assert '"consumed_entity_ids": [2, 3]' in prompt
+
+
+@pytest.mark.parametrize("operation", ["develop", "attack", "prove"])
+def test_non_synthesis_prompts_require_empty_consumed_ids(operation):
+    prompt = _research_prompt(
+        MinimalResearchContext(),
+        {"id": 1},
+        OperationChoice(operation, 1, "Regression test"),
+    )
+
+    assert "For non-synthesis operations, consumed_entity_ids MUST be []." in prompt
+    assert '"consumed_entity_ids": []' in prompt
+
+
+@pytest.mark.parametrize(
+    ("operation", "attack_outcome", "error"),
+    [
+        ("develop", "critical_issue", "Only attack may return an attack outcome"),
+        ("synthesize", "no_critical_issue", "Only attack may return an attack outcome"),
+        ("prove", "inconclusive", "Only attack may return an attack outcome"),
+        ("attack", "not_applicable", "Attack output must state its bounded attack outcome"),
+    ],
+)
+def test_attack_outcome_validation_remains_operation_specific(
+    operation, attack_outcome, error
+):
+    choice = OperationChoice(operation, 1, "Regression test")
+    report = ResearchStepReport(
+        operation=operation,
+        target_entity_id=1,
+        summary="Regression test report.",
+        artifacts=[],
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[],
+        attack_outcome=attack_outcome,
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+    with pytest.raises(ModelOutputError, match=error):
+        _validate_step_report(report, MinimalResearchContext(), choice)
+
+
+def synthesis_report(consumed_entity_ids):
+    return ResearchStepReport(
+        operation="synthesize",
+        target_entity_id=1,
+        summary="Regression test synthesis.",
+        artifacts=[
+            artifact(
+                "failed_approach",
+                "The selected artifacts cannot be combined.",
+                "consumed_id_validation_failure",
+                [1, 2, 3],
+                branch_status="failed",
+            )
+        ],
+        consumed_entity_ids=consumed_entity_ids,
+        addressed_obligation_ids=[],
+        attack_outcome="not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+
+def test_synthesize_accepts_reordered_controller_consumed_ids():
+    choice = OperationChoice(
+        "synthesize", 1, "Regression test", consumed_entity_ids=(2, 3)
+    )
+
+    _validate_step_report(
+        synthesis_report([3, 2]), MinimalResearchContext(1, 2, 3), choice
+    )
+
+
+@pytest.mark.parametrize(
+    ("consumed_entity_ids", "context_ids", "error"),
+    [
+        ([2], (1, 2, 3), "exactly the controller-selected consumed_entity_ids"),
+        ([2, 3, 4], (1, 2, 3, 4), "exactly the controller-selected consumed_entity_ids"),
+        ([2, 3, 99], (1, 2, 3), "unknown/out-of-context entity IDs: 99"),
+    ],
+)
+def test_synthesize_rejects_invalid_consumed_id_sets(
+    consumed_entity_ids, context_ids, error
+):
+    choice = OperationChoice(
+        "synthesize", 1, "Regression test", consumed_entity_ids=(2, 3)
+    )
+
+    with pytest.raises(ModelOutputError, match=error):
+        _validate_step_report(
+            synthesis_report(consumed_entity_ids),
+            MinimalResearchContext(*context_ids),
+            choice,
+        )
+
+
+def test_synthesize_rejects_duplicate_consumed_ids():
+    with pytest.raises(ValueError, match="IDs must not be duplicated"):
+        synthesis_report([2, 2])
+
+
+@pytest.mark.parametrize("operation", ["develop", "attack", "prove"])
+def test_non_synthesis_rejects_non_empty_consumed_ids(operation):
+    report = ResearchStepReport(
+        operation=operation,
+        target_entity_id=1,
+        summary="Regression test report.",
+        artifacts=[],
+        consumed_entity_ids=[2],
+        addressed_obligation_ids=[],
+        attack_outcome="inconclusive" if operation == "attack" else "not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+    with pytest.raises(
+        ModelOutputError,
+        match="Only synthesize may return non-empty consumed_entity_ids",
+    ):
+        _validate_step_report(
+            report,
+            MinimalResearchContext(1, 2),
+            OperationChoice(operation, 1, "Regression test"),
+        )
 
 
 def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
