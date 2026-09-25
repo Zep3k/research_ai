@@ -7,6 +7,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+from .attack import attack as run_attack
 from .config import Config
 from .db import connect, initialize, monthly_spend, utcnow
 from .errors import TheoryError
@@ -19,6 +20,7 @@ from .graph import (
     create_workstream,
     link_workstream_entity,
     list_attributes,
+    normalize_attribute_key,
     set_attribute,
     set_entity_trust,
     set_workstream_status,
@@ -163,6 +165,23 @@ def investigate(idea_id: int, provider: str = typer.Option("openai", help="opena
     run_id = run_investigation(idea_id, provider)
     console.print(f"[green]Saved investigation run #{run_id}[/green]")
     _show_run(run_id)
+
+
+@app.command("attack")
+def attack_command(
+    workstream_id: int,
+    provider: str = typer.Option("openai", help="openai or anthropic"),
+):
+    """Run one graph-scoped adversarial pass for an active attack workstream."""
+    require_workspace()
+    if provider not in {"openai", "anthropic"}:
+        raise typer.BadParameter("provider must be openai or anthropic")
+    outcome = run_attack(workstream_id, provider)
+    console.print(
+        f"[green]Attack completed[/green]: review #{outcome.review_id} "
+        f"({outcome.review_result}), {len(outcome.artifact_ids)} candidate artifact(s)."
+    )
+    workstream_show(workstream_id)
 
 
 def _show_run(run_id: int):
@@ -373,7 +392,9 @@ def attr_set(entity_id: int, key: str, value: str):
     require_workspace()
     with connect() as con:
         set_attribute(con, entity_id, key, value)
-    console.print(f"Set entity #{entity_id}: {escape(key)} = {escape(value)}")
+    console.print(
+        f"Set entity #{entity_id}: {escape(normalize_attribute_key(key))} = {escape(value)}"
+    )
 
 
 @attr_app.command("list")
@@ -551,6 +572,13 @@ def workstream_show(workstream_id: int):
         reviews = con.execute(
             "SELECT * FROM reviews WHERE workstream_id=? ORDER BY id", (workstream_id,)
         ).fetchall()
+        calls = con.execute(
+            """
+            SELECT provider,model,purpose,status,cost_usd,estimated_max_cost_usd,error_message
+            FROM api_calls WHERE workstream_id=? ORDER BY id
+            """,
+            (workstream_id,),
+        ).fetchall()
     console.print(
         Panel(
             f"type: {row['workstream_type']} | status: {row['status']}\n\n"
@@ -565,6 +593,16 @@ def workstream_show(workstream_id: int):
         )
     for review in reviews:
         console.print(f"  review #{review['id']}: {review['review_type']} — {review['result']}")
+        if review["issues"]:
+            console.print(f"    {escape(review['issues'])}")
+    for call in calls:
+        console.print(
+            f"  model call: {call['provider']} / {call['model']} | {call['purpose']} | "
+            f"{call['status']} | estimated cost ${float(call['cost_usd']):.4f} "
+            f"(admission cap ${float(call['estimated_max_cost_usd']):.4f})"
+        )
+        if call["error_message"]:
+            console.print(f"    error: {escape(call['error_message'])}")
 
 
 @workstream_app.command("link")
@@ -583,7 +621,7 @@ def workstream_status(
     status: str,
     summary: str | None = typer.Option(None),
 ):
-    """Record a terminal state without deleting failed work."""
+    """Set execution lifecycle; scientific outcomes belong in reviews/artifacts."""
     require_workspace()
     with connect() as con:
         set_workstream_status(con, workstream_id, status, summary=summary)

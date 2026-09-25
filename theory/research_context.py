@@ -6,7 +6,51 @@ from typing import Any, Iterable
 
 from .db import connect
 from .errors import TheoryError
-from .trust import require_entity
+from .trust import TrustState, require_entity, source_has_identifiable_origin
+
+
+EPISTEMIC_GUIDANCE = {
+    TrustState.SOURCED.value: (
+        "SOURCED / SOURCE-BACKED EVIDENCE (NOT THEOREM-VERIFIED)",
+        "A persisted locator names an origin claimed as evidence. Do not treat this as "
+        "mathematical verification.",
+    ),
+    TrustState.INFERRED.value: (
+        "INFERRED",
+        "Treat as a provisional conclusion derived from evidence or reasoning.",
+    ),
+    TrustState.SPECULATIVE.value: (
+        "SPECULATIVE",
+        "Treat only as a hypothesis or attack direction.",
+    ),
+    TrustState.UNVERIFIED.value: (
+        "UNVERIFIED",
+        "Do not assume true; it has not passed a provenance or review gate.",
+    ),
+    TrustState.CONTRADICTED.value: (
+        "CONTRADICTED / COUNTEREVIDENCE",
+        "Treat as counterevidence or research history, not as an active assumption.",
+    ),
+    TrustState.QUARANTINED.value: (
+        "QUARANTINED — DO NOT ASSUME TRUE",
+        "Never use as a fact or assumption unless a human explicitly reconsiders it.",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class EpistemicGroup:
+    label: str
+    model_instruction: str
+    entities: tuple[dict[str, Any], ...] = ()
+    relations: tuple[dict[str, Any], ...] = ()
+
+
+def _empty_epistemic() -> dict[str, EpistemicGroup]:
+    return {
+        state: EpistemicGroup(label=label, model_instruction=instruction)
+        for state, (label, instruction) in EPISTEMIC_GUIDANCE.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -19,9 +63,32 @@ class ResearchContext:
     sources: tuple[dict[str, Any], ...] = ()
     workstream_links: tuple[dict[str, Any], ...] = ()
     selections: dict[str, tuple[int, ...]] = field(default_factory=dict)
+    epistemic: dict[str, EpistemicGroup] = field(default_factory=_empty_epistemic)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def as_model_payload(self) -> dict[str, Any]:
+        """Serialize context with epistemic policy and partitions foregrounded."""
+        return {
+            "epistemic_policy": [
+                "Sourced means source-backed, not theorem-verified.",
+                "Inferred objects are provisional conclusions.",
+                "Speculative objects are hypotheses.",
+                "Contradicted objects are counterevidence or history.",
+                "Quarantined objects must never be used as assumptions unless explicitly reconsidered.",
+            ],
+            "workstream": self.workstream,
+            "target_entity": self.target_entity,
+            "attributes_by_entity_id": self.attributes,
+            "sources": self.sources,
+            "workstream_links": self.workstream_links,
+            "selections": self.selections,
+            "active_relations": self.relations,
+            "epistemic_partitions": {
+                state: asdict(group) for state, group in self.epistemic.items()
+            },
+        }
 
 
 def _rows_as_dicts(rows: Iterable[sqlite3.Row]) -> tuple[dict[str, Any], ...]:
@@ -43,7 +110,8 @@ def _build_context(
     relation_rows = con.execute(
         f"""
         SELECT * FROM relations
-        WHERE source_entity_id IN ({placeholders}) OR target_entity_id IN ({placeholders})
+        WHERE status='active'
+          AND (source_entity_id IN ({placeholders}) OR target_entity_id IN ({placeholders}))
         ORDER BY id
         """,
         base_params + base_params,
@@ -66,15 +134,22 @@ def _build_context(
         """,
         entity_params,
     ).fetchall()
-    source_rows = con.execute(
+    raw_source_rows = con.execute(
         f"""
-        SELECT es.entity_id,s.* FROM entity_sources es
+        SELECT es.entity_id,s.*,paper.title AS paper_title
+        FROM entity_sources es
         JOIN sources s ON s.id=es.source_id
+        LEFT JOIN entities paper ON paper.id=s.paper_entity_id
         WHERE es.entity_id IN ({entity_placeholders})
         ORDER BY es.entity_id,s.id
         """,
         entity_params,
     ).fetchall()
+    source_rows = []
+    for row in raw_source_rows:
+        source = dict(row)
+        source["identifiable_origin"] = source_has_identifiable_origin(row)
+        source_rows.append(source)
     link_rows = con.execute(
         f"""
         SELECT * FROM workstream_entities
@@ -119,15 +194,26 @@ def _build_context(
     target = next(
         (dict(row) for row in entity_rows if int(row["id"]) == target_entity_id), None
     )
+    epistemic = _empty_epistemic()
+    entity_dicts = _rows_as_dicts(entity_rows)
+    relation_dicts = _rows_as_dicts(relation_rows)
+    for state, group in tuple(epistemic.items()):
+        epistemic[state] = EpistemicGroup(
+            label=group.label,
+            model_instruction=group.model_instruction,
+            entities=tuple(row for row in entity_dicts if row["trust_state"] == state),
+            relations=tuple(row for row in relation_dicts if row["trust_state"] == state),
+        )
     return ResearchContext(
         target_entity=target,
         workstream=dict(workstream) if workstream else None,
-        entities=_rows_as_dicts(entity_rows),
-        relations=_rows_as_dicts(relation_rows),
+        entities=entity_dicts,
+        relations=relation_dicts,
         attributes=attributes,
-        sources=_rows_as_dicts(source_rows),
+        sources=tuple(source_rows),
         workstream_links=_rows_as_dicts(link_rows),
         selections=selections,
+        epistemic=epistemic,
     )
 
 

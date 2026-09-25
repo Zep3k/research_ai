@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import re
 from dataclasses import dataclass
 from typing import Iterable
 
@@ -40,6 +41,12 @@ class AttributeDelta:
     changed: tuple[tuple[str, str, str], ...]
     only_a: tuple[tuple[str, str], ...]
     only_b: tuple[tuple[str, str], ...]
+
+
+def normalize_attribute_key(key: str) -> str:
+    """Apply syntax-only normalization without imposing a domain ontology."""
+    normalized = re.sub(r"[\s-]+", "_", key.strip().lower())
+    return re.sub(r"_+", "_", normalized).strip("_")
 
 
 def add_entity(
@@ -116,11 +123,24 @@ def set_entity_trust(
     project_id: int = 1,
 ) -> None:
     entity = require_entity(con, entity_id, project_id)
-    has_provenance = con.execute(
-        "SELECT 1 FROM entity_sources WHERE entity_id=? LIMIT 1", (entity_id,)
+    has_identifiable_provenance = con.execute(
+        """
+        SELECT 1
+        FROM entity_sources es
+        JOIN sources s ON s.id=es.source_id
+        WHERE es.entity_id=?
+          AND (
+              s.paper_entity_id IS NOT NULL OR
+              length(trim(COALESCE(s.external_url, ''))) > 0
+          )
+        LIMIT 1
+        """,
+        (entity_id,),
     ).fetchone() is not None
     desired = validate_trust_transition(
-        entity["trust_state"], trust_state, has_provenance=has_provenance
+        entity["trust_state"],
+        trust_state,
+        has_identifiable_provenance=has_identifiable_provenance,
     )
     con.execute(
         "UPDATE entities SET trust_state=?,updated_at=? WHERE id=? AND project_id=?",
@@ -137,7 +157,7 @@ def set_attribute(
     project_id: int = 1,
 ) -> None:
     require_entity(con, entity_id, project_id)
-    key = key.strip()
+    key = normalize_attribute_key(key)
     if not key:
         raise TheoryError("Attribute key cannot be empty.")
     now = utcnow()
@@ -293,6 +313,8 @@ def create_workstream(
         raise TheoryError("Workstream goal cannot be empty.")
     parsed_type = parse_enum(WorkstreamType, workstream_type, "workstream type")
     parsed_status = parse_enum(WorkstreamStatus, status, "workstream status")
+    if parsed_status is WorkstreamStatus.LEGACY_FAILED:
+        raise TheoryError("legacy_failed is reserved for migrated V0.2 workstreams.")
     now = utcnow()
     cur = con.execute(
         """
@@ -316,6 +338,8 @@ def set_workstream_status(
     if existing is None:
         raise TheoryError(f"Workstream #{workstream_id} does not exist.")
     parsed = parse_enum(WorkstreamStatus, status, "workstream status")
+    if parsed is WorkstreamStatus.LEGACY_FAILED:
+        raise TheoryError("legacy_failed is reserved for migrated V0.2 workstreams.")
     if summary is None:
         con.execute(
             "UPDATE workstreams SET status=?,updated_at=? WHERE id=?",

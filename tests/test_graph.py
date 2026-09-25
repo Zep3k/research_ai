@@ -13,10 +13,12 @@ from theory.graph import (
     create_workstream,
     link_workstream_entity,
     list_attributes,
+    normalize_attribute_key,
     set_attribute,
     set_entity_trust,
     set_workstream_status,
 )
+from theory.trust import source_has_identifiable_origin
 
 
 def workspace(monkeypatch, tmp_path):
@@ -53,25 +55,34 @@ def test_schema_initialization_has_v02_tables_and_version(monkeypatch, tmp_path)
         "reviews",
         "schema_migrations",
     } <= tables
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
     assert version == SCHEMA_VERSION
     assert foreign_keys == 1
     assert violations == []
 
 
-def test_entities_are_typed_and_attributes_are_generic(monkeypatch, tmp_path):
+def test_entities_are_typed_and_attribute_keys_are_mechanically_normalized(
+    monkeypatch, tmp_path
+):
     workspace(monkeypatch, tmp_path)
     with connect() as con:
         theorem = add_entity(con, "theorem", "Known lower bound")
         set_attribute(con, theorem, "fault_model", "Byzantine")
-        set_attribute(con, theorem, "complexity", "O(n^3)")
-        set_attribute(con, theorem, "complexity", "O(n^2)")
+        set_attribute(con, theorem, " Communication--Complexity ", "O(n^3)")
+        set_attribute(con, theorem, "communication complexity", "O(n^2)")
         attrs = list_attributes(con, theorem)
 
         with pytest.raises(TheoryError, match="Invalid entity type"):
             add_entity(con, "ChatMessage", "Not a research object")
 
-    assert attrs == {"complexity": "O(n^2)", "fault_model": "Byzantine"}
+    assert attrs == {
+        "communication_complexity": "O(n^2)",
+        "fault_model": "Byzantine",
+    }
+    assert normalize_attribute_key(" fault-- model ") == "fault_model"
+    assert normalize_attribute_key("communication") != normalize_attribute_key(
+        "communication complexity"
+    )
 
 
 def test_valid_and_invalid_relations_and_delete_behavior(monkeypatch, tmp_path):
@@ -102,11 +113,25 @@ def test_valid_and_invalid_relations_and_delete_behavior(monkeypatch, tmp_path):
 def test_sourced_claims_require_persisted_provenance(monkeypatch, tmp_path):
     workspace(monkeypatch, tmp_path)
     with connect() as con:
-        with pytest.raises(TrustError, match="requires at least one persisted source"):
+        with pytest.raises(TrustError, match="identifiable origin"):
             add_entity(con, "Finding", "Claim", trust_state="sourced")
 
         paper = add_entity(con, "Paper", "Primary paper")
         claim = add_entity(con, "Theorem", "Theorem 3.2")
+        incomplete_source = add_source(
+            con, claim, page=6, section="Nearby discussion"
+        )
+        incomplete = con.execute(
+            "SELECT * FROM sources WHERE id=?", (incomplete_source,)
+        ).fetchone()
+        assert source_has_identifiable_origin(incomplete) is False
+        with pytest.raises(TrustError, match="identifiable origin"):
+            set_entity_trust(con, claim, "sourced")
+        with pytest.raises(sqlite3.IntegrityError, match="identifiable provenance"):
+            con.execute(
+                "UPDATE entities SET trust_state='sourced' WHERE id=?", (claim,)
+            )
+
         source_id = add_source(
             con,
             claim,
@@ -117,25 +142,55 @@ def test_sourced_claims_require_persisted_provenance(monkeypatch, tmp_path):
             excerpt="Under assumptions A and B, the bound holds.",
             external_url="https://doi.org/10.1/example",
         )
+        identifiable = con.execute(
+            "SELECT * FROM sources WHERE id=?", (source_id,)
+        ).fetchone()
+        assert source_has_identifiable_origin(identifiable) is True
         set_entity_trust(con, claim, "sourced")
 
         row = con.execute("SELECT trust_state FROM entities WHERE id=?", (claim,)).fetchone()
         assert row[0] == "sourced"
-        assert con.execute(
-            "SELECT source_id FROM entity_sources WHERE entity_id=?", (claim,)
-        ).fetchone()[0] == source_id
-        with pytest.raises(sqlite3.IntegrityError, match="last source"):
+        assert source_id in {
+            row[0]
+            for row in con.execute(
+                "SELECT source_id FROM entity_sources WHERE entity_id=?", (claim,)
+            ).fetchall()
+        }
+        with pytest.raises(sqlite3.IntegrityError, match="remove provenance origin"):
+            con.execute(
+                "UPDATE sources SET paper_entity_id=NULL,external_url=NULL WHERE id=?",
+                (source_id,),
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="last identifiable source"):
             con.execute(
                 "DELETE FROM entity_sources WHERE entity_id=? AND source_id=?",
                 (claim, source_id),
             )
 
 
+def test_external_url_is_an_identifiable_origin(monkeypatch, tmp_path):
+    workspace(monkeypatch, tmp_path)
+    with connect() as con:
+        claim = add_entity(con, "Finding", "Externally documented claim")
+        source_id = add_source(
+            con,
+            claim,
+            page=3,
+            external_url="https://arxiv.org/abs/2401.00001",
+        )
+        set_entity_trust(con, claim, "sourced")
+        source = con.execute("SELECT * FROM sources WHERE id=?", (source_id,)).fetchone()
+        assert source_has_identifiable_origin(source) is True
+        assert con.execute(
+            "SELECT trust_state FROM entities WHERE id=?", (claim,)
+        ).fetchone()[0] == "sourced"
+
+
 def test_trust_transitions_are_explicit_and_quarantine_is_sticky(monkeypatch, tmp_path):
     workspace(monkeypatch, tmp_path)
     with connect() as con:
         claim = add_entity(con, "Conjecture", "Candidate", trust_state="speculative")
-        with pytest.raises(TrustError, match="requires persisted provenance"):
+        with pytest.raises(TrustError, match="identifiable origin"):
             set_entity_trust(con, claim, "sourced")
 
         paper = add_entity(con, "Paper", "Reference")
@@ -153,7 +208,17 @@ def test_sourced_relations_require_evidence(monkeypatch, tmp_path):
     with connect() as con:
         a = add_entity(con, "Conjecture", "A")
         b = add_entity(con, "Theorem", "B")
-        with pytest.raises(TrustError, match="requires an evidence source"):
+        incomplete = add_source(con, a, page=4, section="Claimed theorem")
+        with pytest.raises(TrustError, match="identifiable origin"):
+            add_relation(
+                con,
+                a,
+                "EXTENDS",
+                b,
+                trust_state="sourced",
+                evidence_source_id=incomplete,
+            )
+        with pytest.raises(TrustError, match="identifiable origin"):
             add_relation(con, a, "EXTENDS", b, trust_state="sourced")
 
         paper = add_entity(con, "Paper", "Reference")
@@ -171,7 +236,7 @@ def test_sourced_relations_require_evidence(monkeypatch, tmp_path):
         ).fetchone()[0] == "sourced"
 
 
-def test_failed_workstreams_and_artifacts_remain_queryable(monkeypatch, tmp_path):
+def test_workstream_lifecycle_is_separate_from_scientific_outcome(monkeypatch, tmp_path):
     workspace(monkeypatch, tmp_path)
     with connect() as con:
         conjecture = add_entity(con, "Conjecture", "False direction")
@@ -179,7 +244,14 @@ def test_failed_workstreams_and_artifacts_remain_queryable(monkeypatch, tmp_path
         workstream = create_workstream(con, "attack", "Try to refute the conjecture")
         link_workstream_entity(con, workstream, conjecture, "input")
         link_workstream_entity(con, workstream, obstruction, "created")
-        set_workstream_status(con, workstream, "failed", summary="Attack did not decide it.")
+        set_workstream_status(con, workstream, "completed", summary="Attack pass finished.")
+        add_review(
+            con,
+            "counterexample_attempt",
+            "no_flaw_found",
+            workstream_id=workstream,
+            issues="This pass found no refutation; correctness is not implied.",
+        )
 
     with connect() as con:
         row = con.execute("SELECT * FROM workstreams WHERE id=?", (workstream,)).fetchone()
@@ -188,8 +260,8 @@ def test_failed_workstreams_and_artifacts_remain_queryable(monkeypatch, tmp_path
             (workstream,),
         ).fetchall()
 
-    assert row["status"] == "failed"
-    assert row["summary"] == "Attack did not decide it."
+    assert row["status"] == "completed"
+    assert row["summary"] == "Attack pass finished."
     assert [link[0] for link in links] == ["created", "input"]
 
 

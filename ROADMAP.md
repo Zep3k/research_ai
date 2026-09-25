@@ -17,17 +17,25 @@ V0.1 remains usable during migration, but its report JSON and recent-history pro
 - Precise provenance locators and claim-to-source links
 - Separate lifecycle status and epistemic trust state
 - Deterministic trust/write gate
-- Durable workstreams with retained failure states
+- Durable workstream lifecycle with retained failure artifacts and history
 - Workstream artifacts and bounded reviews
 - Deterministic theorem delta
 - Deterministic entity/workstream graph-neighborhood context
 - Ordered schema-version ledger and V0.1 backfill
 - Workstream-aware API cost ledger
 
-## V0.2 evaluation gate
+## First graph-backed attack workflow
 
-Evaluate the system on at least three old research directions with known outcomes, including one false or flawed conjecture. For each case, record whether the graph and delta exposed a hidden assumption, located a decisive known result, prevented a repeated failed approach, or changed the next action. Compare against the retained one-shot-style `investigate` result. Do not infer success from response polish.
+- Identifiable-origin requirement for sourced state
+- Unambiguous workstream execution lifecycle
+- Explicit model-facing epistemic context partitions
+- Syntax-only attribute-key normalization
+- Exactly one graph-scoped provider call per attack
+- Strict structured output and reference validation
+- Quarantined typed artifacts through the deterministic write gate
+- Bounded review, lifecycle completion/error, and workstream-linked cost
+- No automatic retrieval, provider debate, recursion, or new infrastructure
 
-## One next milestone (requires approval)
+## Development freeze: evaluation gate
 
-Build one graph-backed `attack` workflow that consumes an explicitly selected conjecture/workstream context, emits only quarantined or speculative candidate artifacts through the deterministic write gate, and is evaluated on the known cases above. Do not add embeddings, autonomous loops, reviewer swarms, or new infrastructure as part of that milestone.
+Freeze implementation. Reconstruct multiple historical states from one completed theoretical-research project, including a direction before it failed, a proof before its flaw, a direction before a decisive theorem was found, and a successful direction before its key insight. Compare ordinary frontier-model interaction with this graph-backed attack using the same model where possible. Measure actual-issue recovery, assumption recovery, decisive counterexamples, useful false alarms, changed next actions, and cost per useful result. Do not choose another implementation milestone until these results exist.

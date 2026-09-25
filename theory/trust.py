@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 from enum import StrEnum
-from typing import Iterable, TypeVar
+from collections.abc import Iterable, Mapping
+from typing import Any, TypeVar
 
 from .errors import TheoryError, TrustError
 
@@ -69,9 +70,11 @@ class WorkstreamType(StrEnum):
 class WorkstreamStatus(StrEnum):
     ACTIVE = "active"
     COMPLETED = "completed"
-    FAILED = "failed"
-    ABANDONED = "abandoned"
     BLOCKED = "blocked"
+    ABANDONED = "abandoned"
+    ERROR = "error"
+    # Migration-only state: V0.2's `failed` mixed execution and scientific meaning.
+    LEGACY_FAILED = "legacy_failed"
 
 
 class WorkstreamRole(StrEnum):
@@ -137,6 +140,14 @@ def require_source(
     return row
 
 
+def source_has_identifiable_origin(source: Mapping[str, Any] | sqlite3.Row) -> bool:
+    """Return whether a locator names a document, not merely a place within one."""
+    external_url = source["external_url"]
+    return source["paper_entity_id"] is not None or bool(
+        isinstance(external_url, str) and external_url.strip()
+    )
+
+
 def validate_entity_write(
     con: sqlite3.Connection,
     *,
@@ -149,11 +160,14 @@ def validate_entity_write(
     parsed_type = parse_enum(EntityType, entity_type, "entity type")
     parsed_trust = parse_enum(TrustState, trust_state, "trust state")
     sources = tuple(dict.fromkeys(source_ids))
-    for source_id in sources:
-        require_source(con, source_id, project_id)
-    if parsed_trust is TrustState.SOURCED and not sources:
+    source_rows = [require_source(con, source_id, project_id) for source_id in sources]
+    if parsed_trust is TrustState.SOURCED and not any(
+        source_has_identifiable_origin(source) for source in source_rows
+    ):
         origin = "LLM-generated " if generated_by_llm else ""
-        raise TrustError(f"A {origin}sourced entity requires at least one persisted source.")
+        raise TrustError(
+            f"A {origin}sourced entity requires provenance with an identifiable origin."
+        )
     return parsed_type, parsed_trust, sources
 
 
@@ -174,11 +188,18 @@ def validate_relation_write(
     require_entity(con, target_entity_id, project_id)
     if source_entity_id == target_entity_id:
         raise TheoryError("A relation cannot point an entity to itself.")
-    if evidence_source_id is not None:
+    evidence = (
         require_source(con, evidence_source_id, project_id)
-    if parsed_trust is TrustState.SOURCED and evidence_source_id is None:
+        if evidence_source_id is not None
+        else None
+    )
+    if parsed_trust is TrustState.SOURCED and (
+        evidence is None or not source_has_identifiable_origin(evidence)
+    ):
         origin = "LLM-generated " if generated_by_llm else ""
-        raise TrustError(f"A {origin}sourced relation requires an evidence source.")
+        raise TrustError(
+            f"A {origin}sourced relation requires evidence with an identifiable origin."
+        )
     return parsed_type, parsed_trust
 
 
@@ -219,7 +240,7 @@ def validate_trust_transition(
     current: str | TrustState,
     desired: str | TrustState,
     *,
-    has_provenance: bool,
+    has_identifiable_provenance: bool,
 ) -> TrustState:
     old = parse_enum(TrustState, current, "current trust state")
     new = parse_enum(TrustState, desired, "trust state")
@@ -230,6 +251,8 @@ def validate_trust_transition(
             f"Trust transition {old.value!r} -> {new.value!r} is not allowed; "
             "move through 'unverified' for explicit re-evaluation."
         )
-    if new is TrustState.SOURCED and not has_provenance:
-        raise TrustError("Trust state 'sourced' requires persisted provenance.")
+    if new is TrustState.SOURCED and not has_identifiable_provenance:
+        raise TrustError(
+            "Trust state 'sourced' requires provenance with an identifiable origin."
+        )
     return new

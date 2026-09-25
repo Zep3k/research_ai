@@ -52,6 +52,61 @@ INSERT INTO papers VALUES (
 PRAGMA user_version = 2;
 """
 
+V02_SCHEMA_WITH_AMBIGUOUS_STATE = """
+CREATE TABLE projects (
+    id INTEGER PRIMARY KEY CHECK (id = 1), name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE TABLE entities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+    entity_type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL, trust_state TEXT NOT NULL, confidence REAL NOT NULL,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(id,project_id),
+    FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+CREATE TABLE workstreams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+    workstream_type TEXT NOT NULL, goal TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('active','completed','failed','abandoned','blocked')),
+    summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(id,project_id), FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+CREATE TABLE sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+    paper_entity_id INTEGER, source_type TEXT NOT NULL, page INTEGER,
+    section TEXT, theorem TEXT, excerpt TEXT, external_url TEXT, created_at TEXT NOT NULL,
+    UNIQUE(id,project_id)
+);
+CREATE TABLE entity_sources (
+    project_id INTEGER NOT NULL, entity_id INTEGER NOT NULL, source_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL, PRIMARY KEY(entity_id,source_id)
+);
+CREATE TABLE relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+    source_entity_id INTEGER NOT NULL, relation_type TEXT NOT NULL,
+    target_entity_id INTEGER NOT NULL, evidence_source_id INTEGER,
+    status TEXT NOT NULL, trust_state TEXT NOT NULL, confidence REAL NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE workstream_entities (
+    project_id INTEGER NOT NULL, workstream_id INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL, role TEXT NOT NULL, created_at TEXT NOT NULL,
+    PRIMARY KEY(workstream_id,entity_id,role),
+    FOREIGN KEY(workstream_id,project_id) REFERENCES workstreams(id,project_id),
+    FOREIGN KEY(entity_id,project_id) REFERENCES entities(id,project_id)
+);
+INSERT INTO projects VALUES(1,'v02','','2026-01-01T00:00:00+00:00');
+INSERT INTO entities VALUES
+    (1,1,'Conjecture','Old sourced claim','','active','sourced',0.5,'t','t'),
+    (2,1,'Theorem','Related theorem','','active','unverified',0.0,'t','t');
+INSERT INTO sources VALUES(1,1,NULL,'paper_locator',7,'Lemma 4',NULL,NULL,NULL,'t');
+INSERT INTO entity_sources VALUES(1,1,1,'t');
+INSERT INTO relations VALUES(1,1,1,'EXTENDS',2,1,'active','sourced',0.5,'t');
+INSERT INTO workstreams VALUES(1,1,'attack','Old ambiguous attack','failed','No refutation found','t','t');
+INSERT INTO workstream_entities VALUES(1,1,1,'input','t');
+PRAGMA user_version = 3;
+"""
+
 
 def test_existing_v01_database_is_migrated(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -107,5 +162,34 @@ def test_current_v01_state_is_backfilled_once_into_graph(monkeypatch, tmp_path):
         ("papers", 4),
     ]
     assert "workstream_id" in api_columns
-    assert [row[0] for row in migrations] == [1, 2, 3]
+    assert [row[0] for row in migrations] == [1, 2, 3, 4]
     assert count == 2
+
+
+def test_v02_migration_preserves_ambiguous_failed_and_downgrades_weak_sources(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".theory").mkdir()
+    raw = sqlite3.connect(tmp_path / ".theory" / "research.db")
+    raw.executescript(V02_SCHEMA_WITH_AMBIGUOUS_STATE)
+    raw.commit()
+    raw.close()
+
+    with connect() as con:
+        workstream = con.execute("SELECT * FROM workstreams WHERE id=1").fetchone()
+        entity = con.execute("SELECT trust_state FROM entities WHERE id=1").fetchone()
+        relation = con.execute("SELECT trust_state FROM relations WHERE id=1").fetchone()
+        link = con.execute(
+            "SELECT role FROM workstream_entities WHERE workstream_id=1"
+        ).fetchone()
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+        violations = con.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert workstream["status"] == "legacy_failed"
+    assert workstream["summary"] == "No refutation found"
+    assert entity["trust_state"] == "unverified"
+    assert relation["trust_state"] == "unverified"
+    assert link["role"] == "input"
+    assert version == SCHEMA_VERSION
+    assert violations == []

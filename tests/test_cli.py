@@ -95,7 +95,7 @@ def test_graph_cli_and_deterministic_delta(monkeypatch, tmp_path):
         ["relation", "add", "2", "EXTENDS", "1"],
         ["workstream", "create", "attack", "Try to refute conjecture #2"],
         ["workstream", "link", "1", "2", "input"],
-        ["workstream", "status", "1", "failed", "--summary", "No refutation found."],
+        ["workstream", "status", "1", "completed", "--summary", "Attack pass finished."],
     ]
     for command in commands:
         result = runner.invoke(app, command)
@@ -111,5 +111,5 @@ def test_graph_cli_and_deterministic_delta(monkeypatch, tmp_path):
 
     result = runner.invoke(app, ["workstream", "show", "1"])
     assert result.exit_code == 0, result.output
-    assert "failed" in result.output
-    assert "No refutation found." in result.output
+    assert "completed" in result.output
+    assert "Attack pass finished." in result.output

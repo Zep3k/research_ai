@@ -8,7 +8,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # V0.1 tables remain available while the old investigate workflow is retired
 # gradually. New research state belongs in the typed graph tables below.
@@ -86,7 +86,9 @@ CREATE TABLE IF NOT EXISTS workstreams (
         CHECK (workstream_type IN ('literature', 'explore', 'attack', 'proof')),
     goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
     status TEXT NOT NULL DEFAULT 'active'
-        CHECK (status IN ('active', 'completed', 'failed', 'abandoned', 'blocked')),
+        CHECK (status IN (
+            'active', 'completed', 'blocked', 'abandoned', 'error', 'legacy_failed'
+        )),
     summary TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -258,34 +260,6 @@ CREATE INDEX IF NOT EXISTS idx_sources_paper ON sources(paper_entity_id);
 CREATE INDEX IF NOT EXISTS idx_workstreams_project_status
     ON workstreams(project_id, status);
 
-CREATE TRIGGER IF NOT EXISTS entity_sourced_insert_guard
-BEFORE INSERT ON entities
-WHEN NEW.trust_state = 'sourced'
-BEGIN
-    SELECT RAISE(ABORT, 'sourced entity requires attached provenance');
-END;
-
-CREATE TRIGGER IF NOT EXISTS entity_sourced_update_guard
-BEFORE UPDATE OF trust_state ON entities
-WHEN NEW.trust_state = 'sourced' AND NOT EXISTS (
-    SELECT 1 FROM entity_sources
-    WHERE entity_id = NEW.id AND project_id = NEW.project_id
-)
-BEGIN
-    SELECT RAISE(ABORT, 'sourced entity requires attached provenance');
-END;
-
-CREATE TRIGGER IF NOT EXISTS sourced_entity_last_source_guard
-BEFORE DELETE ON entity_sources
-WHEN (SELECT trust_state FROM entities WHERE id = OLD.entity_id) = 'sourced'
- AND NOT EXISTS (
-    SELECT 1 FROM entity_sources
-    WHERE entity_id = OLD.entity_id AND source_id <> OLD.source_id
-)
-BEGIN
-    SELECT RAISE(ABORT, 'cannot remove the last source from a sourced entity');
-END;
-
 CREATE TRIGGER IF NOT EXISTS api_call_workstream_insert_guard
 BEFORE INSERT ON api_calls
 WHEN NEW.workstream_id IS NOT NULL
@@ -300,6 +274,131 @@ WHEN NEW.workstream_id IS NOT NULL
  AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
 BEGIN
     SELECT RAISE(ABORT, 'api call references a missing workstream');
+END;
+"""
+
+
+# These triggers are installed separately so migration 4 can replace V0.2's
+# weaker "any source row is provenance" guards in existing databases.
+TRUST_TRIGGERS = """
+DROP TRIGGER IF EXISTS entity_sourced_insert_guard;
+DROP TRIGGER IF EXISTS entity_sourced_update_guard;
+DROP TRIGGER IF EXISTS sourced_entity_last_source_guard;
+DROP TRIGGER IF EXISTS sourced_entity_origin_guard;
+DROP TRIGGER IF EXISTS sourced_relation_insert_guard;
+DROP TRIGGER IF EXISTS sourced_relation_update_guard;
+DROP TRIGGER IF EXISTS source_origin_update_guard;
+
+CREATE TRIGGER entity_sourced_insert_guard
+BEFORE INSERT ON entities
+WHEN NEW.trust_state = 'sourced'
+BEGIN
+    SELECT RAISE(ABORT, 'sourced entity requires identifiable provenance');
+END;
+
+CREATE TRIGGER entity_sourced_update_guard
+BEFORE UPDATE OF trust_state ON entities
+WHEN NEW.trust_state = 'sourced' AND NOT EXISTS (
+    SELECT 1
+    FROM entity_sources es
+    JOIN sources s ON s.id = es.source_id
+    WHERE es.entity_id = NEW.id
+      AND es.project_id = NEW.project_id
+      AND (
+          s.paper_entity_id IS NOT NULL OR
+          length(trim(COALESCE(s.external_url, ''))) > 0
+      )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'sourced entity requires identifiable provenance');
+END;
+
+CREATE TRIGGER sourced_entity_origin_guard
+BEFORE DELETE ON entity_sources
+WHEN (SELECT trust_state FROM entities WHERE id = OLD.entity_id) = 'sourced'
+ AND EXISTS (
+    SELECT 1 FROM sources s
+    WHERE s.id = OLD.source_id
+      AND (
+          s.paper_entity_id IS NOT NULL OR
+          length(trim(COALESCE(s.external_url, ''))) > 0
+      )
+ )
+ AND NOT EXISTS (
+    SELECT 1
+    FROM entity_sources es
+    JOIN sources s ON s.id = es.source_id
+    WHERE es.entity_id = OLD.entity_id
+      AND es.source_id <> OLD.source_id
+      AND (
+          s.paper_entity_id IS NOT NULL OR
+          length(trim(COALESCE(s.external_url, ''))) > 0
+      )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'cannot remove the last identifiable source from a sourced entity');
+END;
+
+CREATE TRIGGER sourced_relation_insert_guard
+BEFORE INSERT ON relations
+WHEN NEW.trust_state = 'sourced' AND NOT EXISTS (
+    SELECT 1 FROM sources s
+    WHERE s.id = NEW.evidence_source_id
+      AND s.project_id = NEW.project_id
+      AND (
+          s.paper_entity_id IS NOT NULL OR
+          length(trim(COALESCE(s.external_url, ''))) > 0
+      )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'sourced relation requires identifiable provenance');
+END;
+
+CREATE TRIGGER sourced_relation_update_guard
+BEFORE UPDATE OF trust_state, evidence_source_id ON relations
+WHEN NEW.trust_state = 'sourced' AND NOT EXISTS (
+    SELECT 1 FROM sources s
+    WHERE s.id = NEW.evidence_source_id
+      AND s.project_id = NEW.project_id
+      AND (
+          s.paper_entity_id IS NOT NULL OR
+          length(trim(COALESCE(s.external_url, ''))) > 0
+      )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'sourced relation requires identifiable provenance');
+END;
+
+CREATE TRIGGER source_origin_update_guard
+BEFORE UPDATE OF paper_entity_id, external_url ON sources
+WHEN NEW.paper_entity_id IS NULL
+ AND length(trim(COALESCE(NEW.external_url, ''))) = 0
+ AND (
+    EXISTS (
+        SELECT 1 FROM relations r
+        WHERE r.evidence_source_id = OLD.id AND r.trust_state = 'sourced'
+    )
+    OR EXISTS (
+        SELECT 1
+        FROM entity_sources es
+        JOIN entities e ON e.id = es.entity_id
+        WHERE es.source_id = OLD.id
+          AND e.trust_state = 'sourced'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM entity_sources other_es
+              JOIN sources other_s ON other_s.id = other_es.source_id
+              WHERE other_es.entity_id = es.entity_id
+                AND other_es.source_id <> OLD.id
+                AND (
+                    other_s.paper_entity_id IS NOT NULL OR
+                    length(trim(COALESCE(other_s.external_url, ''))) > 0
+                )
+          )
+    )
+ )
+BEGIN
+    SELECT RAISE(ABORT, 'cannot remove provenance origin used by sourced state');
 END;
 """
 
@@ -410,6 +509,119 @@ def _backfill_legacy_entities(con: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_workstreams_v4(con: sqlite3.Connection) -> None:
+    """Replace V0.2's ambiguous `failed` lifecycle without guessing its meaning."""
+    table_sql_row = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='workstreams'"
+    ).fetchone()
+    if table_sql_row is None or "legacy_failed" in (table_sql_row[0] or ""):
+        return
+
+    # SQLite cannot alter a CHECK constraint. Keep child tables in place, rebuild
+    # the parent with the same IDs, then re-enable and audit foreign keys.
+    con.commit()
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        con.executescript(
+            """
+            DROP TRIGGER IF EXISTS api_call_workstream_insert_guard;
+            DROP TRIGGER IF EXISTS api_call_workstream_update_guard;
+            BEGIN IMMEDIATE;
+            CREATE TABLE workstreams_v4 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                workstream_type TEXT NOT NULL
+                    CHECK (workstream_type IN ('literature', 'explore', 'attack', 'proof')),
+                goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN (
+                        'active', 'completed', 'blocked', 'abandoned',
+                        'error', 'legacy_failed'
+                    )),
+                summary TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (id, project_id),
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE RESTRICT
+            );
+            INSERT INTO workstreams_v4(
+                id,project_id,workstream_type,goal,status,summary,created_at,updated_at
+            )
+            SELECT
+                id,project_id,workstream_type,goal,
+                CASE WHEN status='failed' THEN 'legacy_failed' ELSE status END,
+                summary,created_at,updated_at
+            FROM workstreams;
+            DROP TABLE workstreams;
+            ALTER TABLE workstreams_v4 RENAME TO workstreams;
+            COMMIT;
+
+            CREATE TRIGGER api_call_workstream_insert_guard
+            BEFORE INSERT ON api_calls
+            WHEN NEW.workstream_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'api call references a missing workstream');
+            END;
+
+            CREATE TRIGGER api_call_workstream_update_guard
+            BEFORE UPDATE OF workstream_id ON api_calls
+            WHEN NEW.workstream_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'api call references a missing workstream');
+            END;
+            """
+        )
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+
+    violations = con.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError("Foreign-key violation after V0.2 workstream migration.")
+
+
+def _migrate_epistemic_v4(con: sqlite3.Connection) -> None:
+    """Downgrade old sourced state that lacks an identifiable document origin."""
+    now = utcnow()
+    con.execute(
+        """
+        UPDATE entities
+        SET trust_state='unverified',updated_at=?
+        WHERE trust_state='sourced'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM entity_sources es
+              JOIN sources s ON s.id=es.source_id
+              WHERE es.entity_id=entities.id
+                AND (
+                    s.paper_entity_id IS NOT NULL OR
+                    length(trim(COALESCE(s.external_url, ''))) > 0
+                )
+          )
+        """,
+        (now,),
+    )
+    con.execute(
+        """
+        UPDATE relations
+        SET trust_state='unverified'
+        WHERE trust_state='sourced'
+          AND NOT EXISTS (
+              SELECT 1 FROM sources s
+              WHERE s.id=relations.evidence_source_id
+                AND (
+                    s.paper_entity_id IS NOT NULL OR
+                    length(trim(COALESCE(s.external_url, ''))) > 0
+                )
+          )
+        """
+    )
+
+
 def _migrate_existing(con: sqlite3.Connection) -> None:
     if not _table_exists(con, "projects"):
         return
@@ -427,8 +639,16 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _add_column(con, "api_calls", "workstream_id INTEGER")
     # CREATE IF NOT EXISTS also makes migration repairable after an interrupted DDL step.
     con.executescript(SCHEMA)
+    if version < 4:
+        _migrate_workstreams_v4(con)
+        _migrate_epistemic_v4(con)
+    con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_workstreams_project_status "
+        "ON workstreams(project_id,status)"
     )
     if needs_graph_backfill:
         _backfill_legacy_entities(con)
@@ -436,6 +656,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 1, "initial_v01")
     _record_migration(con, 2, "harden_v01_calls_and_sources")
     _record_migration(con, 3, "typed_research_graph")
+    _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -459,6 +680,7 @@ def connect() -> Iterator[sqlite3.Connection]:
 def initialize(name: str) -> None:
     with connect() as con:
         con.executescript(SCHEMA)
+        con.executescript(TRUST_TRIGGERS)
         con.execute(
             "INSERT OR REPLACE INTO projects(id,name,description,created_at) VALUES(1,?,'',?)",
             (name, utcnow()),
@@ -466,6 +688,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 1, "initial_v01")
         _record_migration(con, 2, "harden_v01_calls_and_sources")
         _record_migration(con, 3, "typed_research_graph")
+        _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

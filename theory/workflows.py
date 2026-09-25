@@ -2,19 +2,20 @@ import json
 from collections.abc import Iterable
 
 from .config import Config
-from .db import connect, monthly_spend, utcnow
-from .errors import BudgetExceededError, ModelOutputError, TheoryError
+from .db import connect, utcnow
+from .errors import ModelOutputError, TheoryError
 from .jsonutil import parse_json_model
+from .model_calls import budget_guard as _budget_guard
+from .model_calls import call_model as _call_model
 from .models import (
     Formalization,
     LiteratureBundle,
     LiteratureSearch,
-    ModelResult,
     ResearchReport,
     RetrievedSource,
 )
 from .openalex import search_works
-from .providers import conservative_call_cost, get_model_spec, get_provider
+from .providers import get_model_spec, get_provider
 
 FORMALIZE_MAX_OUTPUT_TOKENS = 8_000
 ANALYZE_MAX_OUTPUT_TOKENS = 16_000
@@ -48,113 +49,6 @@ def _project_context() -> str:
         lines.append("Locally imported papers (titles only; contents are not evidence in this run):")
         lines.extend(f"- #{x['id']}: {x['title']}" for x in papers)
     return "\n".join(lines)
-
-
-def _budget_guard(
-    cfg: Config, *, model: str, prompt: str, max_output_tokens: int, purpose: str
-) -> float:
-    estimated_max = conservative_call_cost(model, prompt, max_output_tokens)
-    spent = monthly_spend()
-    projected = spent + estimated_max
-    if projected > cfg.monthly_budget_usd:
-        raise BudgetExceededError(
-            f"The {purpose} call cannot fit within the monthly API budget: "
-            f"${spent:.4f} spent + up to ${estimated_max:.4f} for this call > "
-            f"${cfg.monthly_budget_usd:.2f}."
-        )
-    return estimated_max
-
-
-def _start_call(
-    run_id: int,
-    provider: str,
-    model: str,
-    purpose: str,
-    *,
-    estimated_max_cost_usd: float,
-    workstream_id: int | None = None,
-) -> int:
-    with connect() as con:
-        cur = con.execute(
-            """
-            INSERT INTO api_calls(
-                run_id,workstream_id,provider,model,purpose,input_tokens,output_tokens,cost_usd,
-                estimated_max_cost_usd,status,error_message,response_text,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                run_id,
-                workstream_id,
-                provider,
-                model,
-                purpose,
-                0,
-                0,
-                0.0,
-                estimated_max_cost_usd,
-                "started",
-                None,
-                None,
-                utcnow(),
-            ),
-        )
-        return int(cur.lastrowid)
-
-
-def _finish_call(
-    call_id: int, *, result: ModelResult | None, error: Exception | None = None
-) -> None:
-    with connect() as con:
-        con.execute(
-            """
-            UPDATE api_calls
-            SET input_tokens=?,output_tokens=?,cost_usd=?,status=?,error_message=?,response_text=?
-            WHERE id=?
-            """,
-            (
-                result.input_tokens if result else 0,
-                result.output_tokens if result else 0,
-                result.cost_usd if result else 0.0,
-                "completed" if result else "failed",
-                str(error)[:2000] if error else None,
-                result.text if result else None,
-                call_id,
-            ),
-        )
-
-
-def _call_model(
-    *,
-    run_id: int,
-    provider,
-    provider_name: str,
-    model: str,
-    purpose: str,
-    prompt: str,
-    max_output_tokens: int,
-    estimated_max_cost_usd: float,
-    workstream_id: int | None = None,
-) -> ModelResult:
-    call_id = _start_call(
-        run_id,
-        provider_name,
-        model,
-        purpose,
-        estimated_max_cost_usd=estimated_max_cost_usd,
-        workstream_id=workstream_id,
-    )
-    try:
-        result = provider.complete(
-            model=model,
-            prompt=prompt,
-            effort="high",
-            max_output_tokens=max_output_tokens,
-        )
-    except Exception as exc:
-        _finish_call(call_id, result=None, error=exc)
-        raise TheoryError(f"{provider_name} {purpose} call failed: {exc}") from exc
-    _finish_call(call_id, result=result)
-    return result
 
 
 def _retrieve_literature(queries: Iterable[str]) -> LiteratureBundle:

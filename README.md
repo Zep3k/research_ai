@@ -38,7 +38,7 @@ typed research graph
         +-- bounded review records
         +-- deterministic graph-neighborhood context
         |
-        +--> optional provider-independent model workflows
+        +--> one graph-backed attack workflow
                  + per-call tokens/cost ledger
                  + local monthly-budget gate
 ```
@@ -70,20 +70,31 @@ Deleting an entity used by a relation is restricted. Entity-owned attributes cas
 
 ### Provenance and trust
 
-`sources` stores a locator into a paper or external source: page, section, theorem number, excerpt, DOI/URL, with fields optional when inapplicable. `entity_sources` attaches one or more locators to a claim. This separate join is necessary because a paper is not itself evidence for every statement attributed to it.
+`sources` stores a locator: page, section, theorem number, excerpt, paper entity, and/or external URL. `entity_sources` attaches one or more locators to a claim. This separate join is necessary because a paper is not itself evidence for every statement attributed to it.
+
+A page- or section-only locator may be retained as an incomplete research note. It cannot support `sourced` state until it has an identifiable origin: either a `Paper` entity or a non-empty stable external URL. The link means only that the location is claimed as evidence for the object; it does not establish the claim's truth.
 
 Lifecycle status and epistemic state answer different questions:
 
 - `status` (`active`, `abandoned`, `resolved`) says what happened to the research object.
 - `trust_state` says what kind of warrant it has: `unverified`, `sourced`, `inferred`, `speculative`, `contradicted`, or `quarantined`.
 
-`sourced` means a concrete persisted locator supports the statement. It does not mean the statement or proof has been mathematically verified. Adding a source does not silently promote a claim; promotion is an explicit command, and the database rejects promotion without provenance. Contradicted or quarantined objects must pass through `unverified` before they can be reconsidered as sourced.
+`sourced` means a persisted locator with an identifiable origin is claimed to support the statement. It does not mean the statement or proof has been mathematically verified. Adding a source does not silently promote a claim; promotion is an explicit command, and application and database gates reject promotion without identifiable provenance. Contradicted or quarantined objects must pass through `unverified` before they can be reconsidered as sourced.
 
 ### Workstreams and reviews
 
-A workstream is a durable focused effort (`literature`, `explore`, `attack`, or `proof`), not an agent persona. Its status can be `active`, `completed`, `failed`, `abandoned`, or `blocked`. Entities attach as `input`, `created`, `modified`, `evidence`, or `blocked_by`.
+A workstream is a durable focused effort (`literature`, `explore`, `attack`, or `proof`), not an agent persona. Its lifecycle status is one of:
 
-Failure is permanent research memory. A failed proof attack, its obstruction, and its counterexample remain queryable so the same dead end is not rediscovered months later.
+- `active`: execution may proceed.
+- `completed`: the bounded workflow execution finished normally, regardless of scientific outcome.
+- `blocked`: execution cannot currently proceed because a recorded dependency is unresolved.
+- `abandoned`: the human intentionally stopped this effort without completing it.
+- `error`: execution failed technically, for example due to provider or output-validation failure.
+- `legacy_failed`: migration-only compatibility state for ambiguous V0.2 `failed`; no scientific or execution conclusion may be inferred until a human reclassifies it.
+
+Entities attach as `input`, `created`, `modified`, `evidence`, or `blocked_by`.
+
+Scientific outcomes do not live in lifecycle status. A completed attack that found no refutation remains `completed`; its `no_flaw_found` or `inconclusive` review records the bounded scientific outcome. Failed approaches, obstructions, and counterexamples remain queryable so the same dead end is not rediscovered months later.
 
 Reviews persist a bounded observation such as `proof_critique` or `source_verification`. Allowed results are only:
 
@@ -113,6 +124,8 @@ theory attr set 1 resilience "t < n/3"
 theory attr list 1
 ```
 
+Attribute keys receive syntax-only normalization: lowercase, surrounding whitespace removed, spaces and hyphens converted to underscores, and repeated underscores collapsed. This intentionally does not merge semantic variants such as `communication` and `communication_complexity`.
+
 Add and inspect relations:
 
 ```bash
@@ -137,7 +150,7 @@ Create and retain focused efforts:
 ```bash
 theory workstream create attack "Try to refute conjecture #2"
 theory workstream link 1 2 input
-theory workstream status 1 failed --summary "No refutation found; adaptive schedule remains unresolved."
+theory workstream status 1 completed --summary "Attack pass finished; scientific result is in its review."
 theory workstream show 1
 ```
 
@@ -203,11 +216,41 @@ entity_context = research_context.for_entity(entity_id)
 workstream_context = research_context.for_workstream(workstream_id)
 ```
 
-The builder selects a deterministic one-hop neighborhood: the target or linked workstream artifacts, direct relations, assumptions, nearby theorems/lemmas, proof attempts, counterexamples, blockers, sourced findings, attributes, and provenance. It performs no embeddings, vector search, or model call.
+The builder selects a deterministic one-hop neighborhood: the target or linked workstream artifacts, active direct relations, assumptions, nearby theorems/lemmas, proof attempts, counterexamples, blockers, sourced findings, attributes, and provenance. Retired relations are excluded.
+
+Every context has explicit `sourced`, `inferred`, `speculative`, `unverified`, `contradicted`, and `quarantined` partitions for both entities and active relations. The model-facing serialization foregrounds these instructions:
+
+- sourced is source-backed, not theorem-verified;
+- inferred is provisional;
+- speculative is a hypothesis;
+- contradicted is counterevidence/history;
+- quarantined must never be assumed true.
+
+## Graph-backed attack workflow
+
+An attack workstream must be `active`, have type `attack`, and contain exactly one eligible primary `input`: `Conjecture`, `ResearchIdea`, `OpenQuestion`, or `Theorem`. Supporting inputs of other types are allowed. Multiple plausible targets are rejected rather than guessed.
+
+```bash
+theory workstream create attack "Try to refute the proposed improvement"
+theory workstream link 1 2 input
+theory attack 1 --provider openai
+theory workstream show 1
+```
+
+The workflow makes exactly one provider call using only `research_context.for_workstream(1)`. It performs no literature retrieval, web search, recursion, provider comparison, or extra display call. The strict result contains a target ID, concise summary, candidate artifacts, and explicit unresolved points. Candidate kinds are:
+
+```text
+counterexample, obstruction, hidden_assumption, boundary_case,
+conflict, ambiguity, failed_strategy, open_question
+```
+
+The model may label a candidate only `inference`, `speculation`, or `unresolved`; `sourced` is not in the output schema. Every candidate becomes a small typed entity through the deterministic write gate with `generated_by_llm=True`, initial trust `quarantined`, and workstream role `created`. Existing source IDs may be cited and attached, but do not lift quarantine. The workflow creates no `REFUTES` relation automatically.
+
+A successful call always sets lifecycle to `completed`. A concrete candidate produces review result `issue_found`; only questions/unresolved output is `inconclusive`; an empty pass with no reported unknowns is `no_flaw_found`. This last phrase means only that this one pass found no concrete issue. Provider or validation failure sets lifecycle to `error`. Budget refusal occurs before execution and leaves it `active`.
 
 ## V0.1 compatibility and migration
 
-The first open of a V0.1 database migrates it in place to schema version 3. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 4. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -218,6 +261,8 @@ Migration behavior is explicit:
 5. `legacy_entity_links` records the old-to-new ID mapping; graph IDs may differ from legacy IDs.
 6. Existing runs, reports, raw provider responses, PDF paths, hashes, and cost records are retained.
 7. `api_calls.workstream_id` is added as nullable. Existing rows remain unattributed; new references are guarded even on migrated tables.
+8. V0.2 `failed` workstreams become `legacy_failed`; the migration does not guess whether execution or research failed.
+9. Existing sourced entities/relations backed only by incomplete locators are conservatively downgraded to `unverified`.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 
@@ -227,7 +272,7 @@ OpenAI and Anthropic adapters remain behind the same provider-independent interf
 
 Before a call, a conservative local bound is checked against the configured monthly budget. Unknown models are refused until pricing is added centrally in `theory/providers.py`. Pricing and model availability are external state and must be verified against official provider documentation before being changed.
 
-The retained `investigate` workflow still operates on legacy ideas and OpenAlex discovery metadata. It is compatibility functionality, not the V0.2 architecture, and its JSON report is not automatically promoted into the research graph.
+The retained `investigate` workflow still operates on legacy ideas and OpenAlex discovery metadata. It is compatibility functionality, not the graph-backed attack architecture, and its JSON report is not automatically promoted into the research graph.
 
 ## Verify locally
 
@@ -241,6 +286,6 @@ Tests require no API keys and make no network or paid model calls. OpenAlex is m
 
 ## Deliberate omissions
 
-V0.2 has no vector database, embeddings, Neo4j, giant-corpus RAG, web UI, cloud infrastructure, Zotero integration, autonomous loop, agent swarm, automatic paper generation, automatic novelty claim, or automatic theorem-verification claim.
+This release has no attack-time retrieval, second-model review, proof/explore workflow, vector database, embeddings, Neo4j, giant-corpus RAG, web UI, cloud infrastructure, Zotero integration, autonomous loop, agent swarm, automatic paper generation, automatic novelty claim, or automatic theorem-verification claim.
 
 The product test remains: **did this prevent the researcher from wasting two weeks?**
