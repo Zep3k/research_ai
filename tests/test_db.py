@@ -107,6 +107,40 @@ INSERT INTO workstream_entities VALUES(1,1,1,'input','t');
 PRAGMA user_version = 3;
 """
 
+V04_SCHEMA_WITH_WORKSTREAM_CALL = """
+CREATE TABLE projects (
+    id INTEGER PRIMARY KEY CHECK (id = 1), name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+);
+CREATE TABLE workstreams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER NOT NULL,
+    workstream_type TEXT NOT NULL
+        CHECK(workstream_type IN ('literature','explore','attack','proof')),
+    goal TEXT NOT NULL, status TEXT NOT NULL
+        CHECK(status IN ('active','completed','blocked','abandoned','error','legacy_failed')),
+    summary TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE(id,project_id), FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+CREATE TABLE api_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER, workstream_id INTEGER,
+    provider TEXT NOT NULL, model TEXT NOT NULL, purpose TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0, estimated_max_cost_usd REAL NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'completed', error_message TEXT, response_text TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(workstream_id) REFERENCES workstreams(id) ON DELETE RESTRICT
+);
+INSERT INTO projects VALUES(1,'v04','','2026-01-01T00:00:00+00:00');
+INSERT INTO workstreams VALUES(
+    9,1,'attack','Preserve me','completed','Old result','t','t'
+);
+INSERT INTO api_calls(
+    id,workstream_id,provider,model,purpose,input_tokens,output_tokens,cost_usd,
+    estimated_max_cost_usd,status,created_at
+) VALUES(3,9,'openai','gpt-5.6-sol','attack',10,5,0.01,0.2,'completed','t');
+PRAGMA user_version = 4;
+"""
+
 
 def test_existing_v01_database_is_migrated(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
@@ -162,7 +196,7 @@ def test_current_v01_state_is_backfilled_once_into_graph(monkeypatch, tmp_path):
         ("papers", 4),
     ]
     assert "workstream_id" in api_columns
-    assert [row[0] for row in migrations] == [1, 2, 3, 4]
+    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5]
     assert count == 2
 
 
@@ -191,5 +225,37 @@ def test_v02_migration_preserves_ambiguous_failed_and_downgrades_weak_sources(
     assert entity["trust_state"] == "unverified"
     assert relation["trust_state"] == "unverified"
     assert link["role"] == "input"
+    assert version == SCHEMA_VERSION
+    assert violations == []
+
+
+def test_v04_migration_adds_develop_type_and_preserves_workstream_calls(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".theory").mkdir()
+    raw = sqlite3.connect(tmp_path / ".theory" / "research.db")
+    raw.executescript(V04_SCHEMA_WITH_WORKSTREAM_CALL)
+    raw.commit()
+    raw.close()
+
+    with connect() as con:
+        old_workstream = con.execute(
+            "SELECT * FROM workstreams WHERE id=9"
+        ).fetchone()
+        old_call = con.execute("SELECT * FROM api_calls WHERE id=3").fetchone()
+        con.execute(
+            """
+            INSERT INTO workstreams(
+                project_id,workstream_type,goal,status,summary,created_at,updated_at
+            ) VALUES(1,'develop','Advance the idea','active','','t','t')
+            """
+        )
+        version = con.execute("PRAGMA user_version").fetchone()[0]
+        violations = con.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert old_workstream["goal"] == "Preserve me"
+    assert old_workstream["status"] == "completed"
+    assert old_call["workstream_id"] == 9
     assert version == SCHEMA_VERSION
     assert violations == []

@@ -10,6 +10,7 @@ from rich.text import Text
 from .attack import attack as run_attack
 from .config import Config
 from .db import connect, initialize, monthly_spend, utcnow
+from .develop import develop as run_develop
 from .errors import TheoryError
 from .graph import (
     add_entity,
@@ -180,6 +181,24 @@ def attack_command(
     console.print(
         f"[green]Attack completed[/green]: review #{outcome.review_id} "
         f"({outcome.review_result}), {len(outcome.artifact_ids)} candidate artifact(s)."
+    )
+    workstream_show(workstream_id)
+
+
+@app.command("develop")
+def develop_command(
+    workstream_id: int,
+    provider: str = typer.Option("openai", help="openai or anthropic"),
+):
+    """Run one graph-scoped constructive pass for an active develop workstream."""
+    require_workspace()
+    if provider not in {"openai", "anthropic"}:
+        raise typer.BadParameter("provider must be openai or anthropic")
+    outcome = run_develop(workstream_id, provider)
+    console.print(
+        f"[green]Development completed[/green]: "
+        f"{len(outcome.development_artifact_ids)} technical artifact(s), "
+        f"{len(outcome.branch_artifact_ids)} branch artifact(s)."
     )
     workstream_show(workstream_id)
 

@@ -38,7 +38,7 @@ typed research graph
         +-- bounded review records
         +-- deterministic graph-neighborhood context
         |
-        +--> one graph-backed attack workflow
+        +--> small graph-backed attack/develop workflows
                  + per-call tokens/cost ledger
                  + local monthly-budget gate
 ```
@@ -83,7 +83,7 @@ Lifecycle status and epistemic state answer different questions:
 
 ### Workstreams and reviews
 
-A workstream is a durable focused effort (`literature`, `explore`, `attack`, or `proof`), not an agent persona. Its lifecycle status is one of:
+A workstream is a durable focused effort (`literature`, `explore`, `attack`, `develop`, or `proof`), not an agent persona. Its lifecycle status is one of:
 
 - `active`: execution may proceed.
 - `completed`: the bounded workflow execution finished normally, regardless of scientific outcome.
@@ -248,9 +248,35 @@ The model may label a candidate only `inference`, `speculation`, or `unresolved`
 
 A successful call always sets lifecycle to `completed`. A concrete candidate produces review result `issue_found`; only questions/unresolved output is `inconclusive`; an empty pass with no reported unknowns is `no_flaw_found`. This last phrase means only that this one pass found no concrete issue. Provider or validation failure sets lifecycle to `error`. Budget refusal occurs before execution and leaves it `active`.
 
+## Graph-backed develop workflow
+
+A develop workstream must be `active`, have type `develop`, and contain exactly one eligible primary `input`. Eligible targets are a `ResearchIdea`, `Conjecture`, `OpenQuestion`, `Theorem`, `Lemma`, `Technique`, `ProofAttempt`, or `Finding`. Other inputs can supply context, but multiple eligible targets are rejected rather than guessed.
+
+```bash
+theory workstream create develop "Advance the promising construction"
+theory workstream link 2 2 input
+theory develop 2 --provider openai
+theory workstream show 2
+```
+
+Like `attack`, `develop` makes exactly one provider call over `research_context.for_workstream(...)`, performs no retrieval, and records the workstream-linked call and cost before invoking the provider. Its strict result must contain:
+
+- a derived consequence;
+- a parameter or counting analysis;
+- a proof obligation;
+- at least one intermediate lemma or protocol component;
+- two to four materially different branches; and
+- explicit unresolved points.
+
+Branches have a scientific-development label of `promising`, `blocked`, `failed`, or `unresolved`; this does not alter the workstream lifecycle meaning. A failed branch is retained as a `FailedApproach`, a blocked branch as an `Obstruction`, and promising/unresolved branches as `Technique` candidates. Other development items map to the existing `Finding`, `Lemma`, `Technique`, and `OpenQuestion` entity types.
+
+All model-created development entities pass through the normal write gate with `generated_by_llm=True`, start `quarantined`, and attach to the workstream as `created`. Model output can say only `inference`, `speculation`, or `unresolved`; those labels are retained as metadata and do not lift quarantine. Existing in-context source IDs may be cited, but do not make the generated object sourced. No graph relation, novelty claim, proof claim, or verification review is created automatically.
+
+A valid provider response sets lifecycle to `completed`, including when a branch failed. Provider or structured-output failure sets lifecycle to `error`; budget refusal occurs before execution and leaves the workstream `active`. `workstream show` reads the stored summary, artifacts, trust states, and cost without another model call.
+
 ## V0.1 compatibility and migration
 
-The first open of an older database migrates it in place to schema version 4. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 5. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -263,6 +289,7 @@ Migration behavior is explicit:
 7. `api_calls.workstream_id` is added as nullable. Existing rows remain unattributed; new references are guarded even on migrated tables.
 8. V0.2 `failed` workstreams become `legacy_failed`; the migration does not guess whether execution or research failed.
 9. Existing sourced entities/relations backed only by incomplete locators are conservatively downgraded to `unverified`.
+10. Schema version 5 broadens only the workstream-type constraint to add `develop`; existing workstream rows, links, and model-call references retain their IDs and values.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 
@@ -286,6 +313,6 @@ Tests require no API keys and make no network or paid model calls. OpenAlex is m
 
 ## Deliberate omissions
 
-This release has no attack-time retrieval, second-model review, proof/explore workflow, vector database, embeddings, Neo4j, giant-corpus RAG, web UI, cloud infrastructure, Zotero integration, autonomous loop, agent swarm, automatic paper generation, automatic novelty claim, or automatic theorem-verification claim.
+This release has no attack/develop-time retrieval, second-model review, proof workflow, autonomous explore loop, vector database, embeddings, Neo4j, giant-corpus RAG, web UI, cloud infrastructure, Zotero integration, autonomous loop, agent swarm, automatic paper generation, automatic novelty claim, or automatic theorem-verification claim.
 
 The product test remains: **did this prevent the researcher from wasting two weeks?**

@@ -64,6 +64,7 @@ class WorkstreamType(StrEnum):
     LITERATURE = "literature"
     EXPLORE = "explore"
     ATTACK = "attack"
+    DEVELOP = "develop"
     PROOF = "proof"
 
 

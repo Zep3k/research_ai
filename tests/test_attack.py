@@ -3,7 +3,7 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from theory.attack import attack
+from theory.attack import ATTACK_MAX_OUTPUT_TOKENS, attack
 from theory.cli import app
 from theory.config import Config
 from theory.db import connect, initialize
@@ -119,7 +119,7 @@ def test_attack_uses_only_graph_context_and_persists_quarantined_artifacts(
     assert "UNRELATED PROJECT HISTORY SENTINEL" not in prompt
     assert "SOURCED / SOURCE-BACKED EVIDENCE" in prompt
     assert "QUARANTINED — DO NOT ASSUME TRUE" in prompt
-    assert provider.calls[0]["max_output_tokens"] == 8_000
+    assert provider.calls[0]["max_output_tokens"] == ATTACK_MAX_OUTPUT_TOKENS
 
     with connect() as con:
         workstream_row = con.execute(

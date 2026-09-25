@@ -1,0 +1,16 @@
+╭─ Workstream #1: Given the isolation indistinguishability idea and the advers─╮
+│ type: attack | status: error                                                 │
+│                                                                              │
+│ Attack execution error: ModelOutputError: Model JSON did not match           │
+│ AttackReport: 1 validation error for AttackReport                            │
+│ candidates                                                                   │
+│   List should have at most 12 items after validation, not 17 [type=too_long, │
+│ input_value=[{'candidate_type': 'ambi...atch multiple values.'}],            │
+│ input_type=list]                                                             │
+│     For further information visit                                            │
+│ https://errors.pydantic.dev/2.13/v/too_long                                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+   #1 Conjecture: The asynchronous A2A model may inherently require high 
+communication complexity (unverified)
+  model call: openai / gpt-5.6-sol | attack | completed | estimated cost $0.1666
+(admission cap $0.1963)

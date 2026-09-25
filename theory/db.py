@@ -8,7 +8,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # V0.1 tables remain available while the old investigate workflow is retired
 # gradually. New research state belongs in the typed graph tables below.
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS workstreams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
     workstream_type TEXT NOT NULL
-        CHECK (workstream_type IN ('literature', 'explore', 'attack', 'proof')),
+        CHECK (workstream_type IN ('literature', 'explore', 'attack', 'develop', 'proof')),
     goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN (
@@ -622,6 +622,80 @@ def _migrate_epistemic_v4(con: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_workstreams_v5(con: sqlite3.Connection) -> None:
+    """Add the dedicated develop workstream type without changing existing rows."""
+    table_sql_row = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='workstreams'"
+    ).fetchone()
+    if table_sql_row is None or "'develop'" in (table_sql_row[0] or ""):
+        return
+
+    # SQLite cannot alter a CHECK constraint. Preserve parent IDs while foreign
+    # keys are disabled, then audit every child reference after the rebuild.
+    con.commit()
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        con.executescript(
+            """
+            DROP TRIGGER IF EXISTS api_call_workstream_insert_guard;
+            DROP TRIGGER IF EXISTS api_call_workstream_update_guard;
+            BEGIN IMMEDIATE;
+            CREATE TABLE workstreams_v5 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                workstream_type TEXT NOT NULL
+                    CHECK (workstream_type IN (
+                        'literature', 'explore', 'attack', 'develop', 'proof'
+                    )),
+                goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN (
+                        'active', 'completed', 'blocked', 'abandoned',
+                        'error', 'legacy_failed'
+                    )),
+                summary TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (id, project_id),
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE RESTRICT
+            );
+            INSERT INTO workstreams_v5(
+                id,project_id,workstream_type,goal,status,summary,created_at,updated_at
+            )
+            SELECT id,project_id,workstream_type,goal,status,summary,created_at,updated_at
+            FROM workstreams;
+            DROP TABLE workstreams;
+            ALTER TABLE workstreams_v5 RENAME TO workstreams;
+            COMMIT;
+
+            CREATE TRIGGER api_call_workstream_insert_guard
+            BEFORE INSERT ON api_calls
+            WHEN NEW.workstream_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'api call references a missing workstream');
+            END;
+
+            CREATE TRIGGER api_call_workstream_update_guard
+            BEFORE UPDATE OF workstream_id ON api_calls
+            WHEN NEW.workstream_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'api call references a missing workstream');
+            END;
+            """
+        )
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+
+    violations = con.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError("Foreign-key violation after develop-workstream migration.")
+
+
 def _migrate_existing(con: sqlite3.Connection) -> None:
     if not _table_exists(con, "projects"):
         return
@@ -642,6 +716,8 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     if version < 4:
         _migrate_workstreams_v4(con)
         _migrate_epistemic_v4(con)
+    if version < 5:
+        _migrate_workstreams_v5(con)
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -657,6 +733,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 2, "harden_v01_calls_and_sources")
     _record_migration(con, 3, "typed_research_graph")
     _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
+    _record_migration(con, 5, "develop_workstream_type")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -689,6 +766,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 2, "harden_v01_calls_and_sources")
         _record_migration(con, 3, "typed_research_graph")
         _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
+        _record_migration(con, 5, "develop_workstream_type")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

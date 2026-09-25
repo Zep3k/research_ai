@@ -22,7 +22,7 @@ from .providers import get_model_spec, get_provider
 from .research_context import ResearchContext, for_workstream
 
 
-ATTACK_MAX_OUTPUT_TOKENS = 8_000
+ATTACK_MAX_OUTPUT_TOKENS = 16_000
 PRIMARY_TARGET_TYPES = {"Conjecture", "ResearchIdea", "OpenQuestion", "Theorem"}
 CONCRETE_CANDIDATE_TYPES = {
     "counterexample",
@@ -176,6 +176,8 @@ speculation, or unresolved as epistemic_status.
 
 GRAPH CONTEXT
 {json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False)}
+
+Return at most 12 candidates. Prioritize the 12 most technically important and non-redundant candidates.
 
 Return ONLY strict JSON with exactly this shape:
 {{
