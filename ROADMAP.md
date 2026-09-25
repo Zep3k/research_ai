@@ -47,6 +47,19 @@ V0.1 remains usable during migration, but its report JSON and recent-history pro
 - Workstream-linked cost accounting and completion/error lifecycle
 - No automatic relations, proof claims, retrieval, debate, recursion, or new infrastructure
 
+## Bounded adaptive research controller
+
+- Deterministic graph-state operation selection among develop, attack, synthesize, and prove
+- Exactly one provider call per persisted iteration; no model-planner call
+- Durable operation rationale, target, progress, duplicate count, outcome, and stop reason
+- Strict graph-scoped structured output with quarantined artifacts and relations
+- Synthesis consumes at least two linked artifacts for one specific obligation
+- Prove/attack eligibility gates require precise candidates
+- Failed/blocked branches and new proof obligations remain durable graph objects
+- Deterministic material-key and lexical duplicate rejection
+- Early stops for bounded attack success, terminal branches, stagnation, human judgment, budget, and call limit
+- No retrieval, provider debate, embeddings, or unbounded autonomy
+
 ## Development freeze: evaluation gate
 
-Freeze implementation. Reconstruct multiple historical states from one completed theoretical-research project, including a direction before it failed, a proof before its flaw, a direction before a decisive theorem was found, and a successful direction before its key insight. Compare ordinary frontier-model interaction with the graph-backed attack and develop workflows using the same model where possible. Measure actual-issue recovery, assumption recovery, decisive counterexamples, recovered intermediate insights, useful false alarms, changed next actions, and cost per useful result. Do not choose another implementation milestone until these results exist.
+Freeze implementation. Reconstruct multiple historical states from one completed theoretical-research project, including a direction before it failed, a proof before its flaw, a direction before a decisive theorem was found, and a successful direction before its key insight. Compare ordinary frontier-model interaction with the graph-backed single-step workflows and bounded controller using the same model where possible. Measure actual-issue recovery, assumption recovery, decisive counterexamples, recovered intermediate insights, useful false alarms, changed next actions, stagnation, and cost per useful result. Do not choose another implementation milestone until these results exist.

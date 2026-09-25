@@ -8,7 +8,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # V0.1 tables remain available while the old investigate workflow is retired
 # gradually. New research state belongs in the typed graph tables below.
@@ -83,7 +83,9 @@ CREATE TABLE IF NOT EXISTS workstreams (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER NOT NULL,
     workstream_type TEXT NOT NULL
-        CHECK (workstream_type IN ('literature', 'explore', 'attack', 'develop', 'proof')),
+        CHECK (workstream_type IN (
+            'literature', 'explore', 'attack', 'develop', 'research', 'proof'
+        )),
     goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN (
@@ -231,6 +233,38 @@ CREATE TABLE IF NOT EXISTS reviews (
     FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS research_iterations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    workstream_id INTEGER NOT NULL,
+    iteration_number INTEGER NOT NULL CHECK (iteration_number > 0),
+    operation TEXT NOT NULL CHECK (operation IN (
+        'develop', 'attack', 'synthesize', 'prove'
+    )),
+    target_entity_id INTEGER NOT NULL,
+    rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
+    status TEXT NOT NULL DEFAULT 'running'
+        CHECK (status IN ('running', 'completed', 'error')),
+    material_progress INTEGER NOT NULL DEFAULT 0
+        CHECK (material_progress IN (0, 1)),
+    artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+    duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
+    attack_outcome TEXT NOT NULL DEFAULT 'not_applicable'
+        CHECK (attack_outcome IN (
+            'not_applicable', 'critical_issue', 'no_critical_issue', 'inconclusive'
+        )),
+    stop_reason TEXT,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    UNIQUE(workstream_id, iteration_number),
+    FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE RESTRICT,
+    FOREIGN KEY(workstream_id, project_id)
+        REFERENCES workstreams(id, project_id) ON DELETE CASCADE,
+    FOREIGN KEY(target_entity_id, project_id)
+        REFERENCES entities(id, project_id) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS legacy_entity_links (
     project_id INTEGER NOT NULL,
     legacy_table TEXT NOT NULL CHECK (legacy_table IN ('ideas', 'papers')),
@@ -259,6 +293,8 @@ CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_entity_id);
 CREATE INDEX IF NOT EXISTS idx_sources_paper ON sources(paper_entity_id);
 CREATE INDEX IF NOT EXISTS idx_workstreams_project_status
     ON workstreams(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_research_iterations_workstream
+    ON research_iterations(workstream_id, iteration_number);
 
 CREATE TRIGGER IF NOT EXISTS api_call_workstream_insert_guard
 BEFORE INSERT ON api_calls
@@ -696,6 +732,78 @@ def _migrate_workstreams_v5(con: sqlite3.Connection) -> None:
         raise RuntimeError("Foreign-key violation after develop-workstream migration.")
 
 
+def _migrate_workstreams_v6(con: sqlite3.Connection) -> None:
+    """Add the bounded research-controller workstream type without reinterpreting rows."""
+    table_sql_row = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='workstreams'"
+    ).fetchone()
+    if table_sql_row is None or "'research'" in (table_sql_row[0] or ""):
+        return
+
+    con.commit()
+    con.execute("PRAGMA foreign_keys = OFF")
+    try:
+        con.executescript(
+            """
+            DROP TRIGGER IF EXISTS api_call_workstream_insert_guard;
+            DROP TRIGGER IF EXISTS api_call_workstream_update_guard;
+            BEGIN IMMEDIATE;
+            CREATE TABLE workstreams_v6 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_id INTEGER NOT NULL,
+                workstream_type TEXT NOT NULL
+                    CHECK (workstream_type IN (
+                        'literature', 'explore', 'attack', 'develop', 'research', 'proof'
+                    )),
+                goal TEXT NOT NULL CHECK (length(trim(goal)) > 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status IN (
+                        'active', 'completed', 'blocked', 'abandoned',
+                        'error', 'legacy_failed'
+                    )),
+                summary TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (id, project_id),
+                FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE RESTRICT
+            );
+            INSERT INTO workstreams_v6(
+                id,project_id,workstream_type,goal,status,summary,created_at,updated_at
+            )
+            SELECT id,project_id,workstream_type,goal,status,summary,created_at,updated_at
+            FROM workstreams;
+            DROP TABLE workstreams;
+            ALTER TABLE workstreams_v6 RENAME TO workstreams;
+            COMMIT;
+
+            CREATE TRIGGER api_call_workstream_insert_guard
+            BEFORE INSERT ON api_calls
+            WHEN NEW.workstream_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'api call references a missing workstream');
+            END;
+
+            CREATE TRIGGER api_call_workstream_update_guard
+            BEFORE UPDATE OF workstream_id ON api_calls
+            WHEN NEW.workstream_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM workstreams WHERE id = NEW.workstream_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'api call references a missing workstream');
+            END;
+            """
+        )
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.execute("PRAGMA foreign_keys = ON")
+
+    violations = con.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        raise RuntimeError("Foreign-key violation after research-workstream migration.")
+
+
 def _migrate_existing(con: sqlite3.Connection) -> None:
     if not _table_exists(con, "projects"):
         return
@@ -718,6 +826,8 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
         _migrate_epistemic_v4(con)
     if version < 5:
         _migrate_workstreams_v5(con)
+    if version < 6:
+        _migrate_workstreams_v6(con)
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -734,6 +844,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 3, "typed_research_graph")
     _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
     _record_migration(con, 5, "develop_workstream_type")
+    _record_migration(con, 6, "bounded_research_controller")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -767,6 +878,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 3, "typed_research_graph")
         _record_migration(con, 4, "epistemic_guards_and_workstream_lifecycle")
         _record_migration(con, 5, "develop_workstream_type")
+        _record_migration(con, 6, "bounded_research_controller")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

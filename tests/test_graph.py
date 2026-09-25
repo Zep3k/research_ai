@@ -53,9 +53,10 @@ def test_schema_initialization_has_v02_tables_and_version(monkeypatch, tmp_path)
         "workstreams",
         "workstream_entities",
         "reviews",
+        "research_iterations",
         "schema_migrations",
     } <= tables
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6]
     assert version == SCHEMA_VERSION
     assert foreign_keys == 1
     assert violations == []

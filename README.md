@@ -38,7 +38,7 @@ typed research graph
         +-- bounded review records
         +-- deterministic graph-neighborhood context
         |
-        +--> small graph-backed attack/develop workflows
+        +--> small graph-backed workflows + bounded controller
                  + per-call tokens/cost ledger
                  + local monthly-budget gate
 ```
@@ -83,7 +83,7 @@ Lifecycle status and epistemic state answer different questions:
 
 ### Workstreams and reviews
 
-A workstream is a durable focused effort (`literature`, `explore`, `attack`, `develop`, or `proof`), not an agent persona. Its lifecycle status is one of:
+A workstream is a durable focused effort (`literature`, `explore`, `attack`, `develop`, `research`, or `proof`), not an agent persona. Its lifecycle status is one of:
 
 - `active`: execution may proceed.
 - `completed`: the bounded workflow execution finished normally, regardless of scientific outcome.
@@ -274,9 +274,44 @@ All model-created development entities pass through the normal write gate with `
 
 A valid provider response sets lifecycle to `completed`, including when a branch failed. Provider or structured-output failure sets lifecycle to `error`; budget refusal occurs before execution and leaves the workstream `active`. `workstream show` reads the stored summary, artifacts, trust states, and cost without another model call.
 
+## Bounded iterative research controller
+
+The `research` controller is deliberately bounded, graph-scoped, and auditable. It requires an active `research` workstream with exactly one eligible primary input:
+
+```bash
+theory workstream create research "Advance and stress-test the candidate"
+theory workstream link 3 2 input
+theory research 3 --provider openai --max-calls 4
+theory workstream show 3
+```
+
+`--max-calls` is limited to 1–20. Every completed iteration makes exactly one provider call. A deterministic controller—not another model call—chooses the next operation from current linked graph state:
+
+- `develop` when the target is still vague or lacks an actionable proof/synthesis frontier;
+- `synthesize` when a specific open proof obligation has at least two usable linked artifacts;
+- `prove` only when a precise theorem, lemma, protocol, conjecture, or proof candidate exists;
+- `attack` only for a concrete theorem/lemma/protocol/proof candidate, prioritizing new proof attempts.
+
+The choice, target, and rationale are persisted in `research_iterations` before the operation call. The model must echo that choice; it cannot redirect the controller. Synthesis must echo and reference every required consumed entity. All prompts contain only `research_context.for_workstream(...)`, the deterministic decision, and no retrieval or chat history.
+
+Each strict response contains typed artifacts, a stable `material_key`, in-context entity/source references, provisional epistemic status, addressed-obligation candidates, attack outcome, unresolved points, and any request for human judgment. New objects and generated `ATTEMPTS` relations pass through the write gate as `quarantined` and attach to the workstream. An addressed obligation means only that a concrete candidate lemma/proof attempt was recorded; it does not mean the obligation or theorem is verified.
+
+Failed or refuted branches persist as `FailedApproach`; blocked branches persist as `Obstruction`; new proof obligations persist as `OpenQuestion`. A deterministic duplicate gate rejects repeated material keys and high-overlap normalized statements. Rejected rephrasing is not material progress.
+
+The controller stops when:
+
+- addressed obligations are followed by an attack reporting `no_critical_issue`—recorded explicitly as a bounded, non-verifying result;
+- every recorded branch is blocked, failed, or refuted;
+- two consecutive iterations create no substantive non-duplicate object;
+- the response says human scientific judgment is required;
+- the call limit is reached; or
+- the local budget guard refuses the next call.
+
+Success or call-limit completion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Budget refusal happens before an iteration or API-call record is created and leaves the workstream active. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
+
 ## V0.1 compatibility and migration
 
-The first open of an older database migrates it in place to schema version 5. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 6. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -290,6 +325,7 @@ Migration behavior is explicit:
 8. V0.2 `failed` workstreams become `legacy_failed`; the migration does not guess whether execution or research failed.
 9. Existing sourced entities/relations backed only by incomplete locators are conservatively downgraded to `unverified`.
 10. Schema version 5 broadens only the workstream-type constraint to add `develop`; existing workstream rows, links, and model-call references retain their IDs and values.
+11. Schema version 6 adds the `research` workstream type and durable `research_iterations`; existing workstream IDs, links, reviews, and model-call references are preserved.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 
@@ -313,6 +349,6 @@ Tests require no API keys and make no network or paid model calls. OpenAlex is m
 
 ## Deliberate omissions
 
-This release has no attack/develop-time retrieval, second-model review, proof workflow, autonomous explore loop, vector database, embeddings, Neo4j, giant-corpus RAG, web UI, cloud infrastructure, Zotero integration, autonomous loop, agent swarm, automatic paper generation, automatic novelty claim, or automatic theorem-verification claim.
+This release has no workflow-time retrieval, second-model review, unbounded autonomous loop, vector database, embeddings, Neo4j, giant-corpus RAG, web UI, cloud infrastructure, Zotero integration, agent swarm, automatic paper generation, automatic novelty claim, or automatic theorem-verification claim.
 
 The product test remains: **did this prevent the researcher from wasting two weeks?**

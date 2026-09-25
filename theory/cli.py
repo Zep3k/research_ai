@@ -28,6 +28,7 @@ from .graph import (
 )
 from .papers import import_pdf
 from .paths import STATE_DIR, PAPERS_DIR, require_workspace
+from .research import MAX_CONTROLLER_CALLS, research as run_research
 from .trust import EntityType, parse_enum
 from .workflows import investigate as run_investigation
 
@@ -199,6 +200,33 @@ def develop_command(
         f"[green]Development completed[/green]: "
         f"{len(outcome.development_artifact_ids)} technical artifact(s), "
         f"{len(outcome.branch_artifact_ids)} branch artifact(s)."
+    )
+    workstream_show(workstream_id)
+
+
+@app.command("research")
+def research_command(
+    workstream_id: int,
+    provider: str = typer.Option("openai", help="openai or anthropic"),
+    max_calls: int = typer.Option(
+        4,
+        "--max-calls",
+        min=1,
+        max=MAX_CONTROLLER_CALLS,
+        help="Maximum model calls for this bounded controller run.",
+    ),
+):
+    """Run the bounded adaptive controller for an active research workstream."""
+    require_workspace()
+    if provider not in {"openai", "anthropic"}:
+        raise typer.BadParameter("provider must be openai or anthropic")
+    outcome = run_research(
+        workstream_id, provider, max_calls=max_calls
+    )
+    console.print(
+        f"[green]Research controller stopped[/green]: {escape(outcome.stop_reason)}; "
+        f"{outcome.calls_made} model call(s), {len(outcome.artifact_ids)} artifact(s), "
+        f"status {escape(outcome.final_status)}."
     )
     workstream_show(workstream_id)
 
@@ -588,6 +616,14 @@ def workstream_show(workstream_id: int):
             """,
             (workstream_id,),
         ).fetchall()
+        iterations = con.execute(
+            """
+            SELECT iteration_number,operation,target_entity_id,rationale,status,
+                   material_progress,duplicate_count,attack_outcome,stop_reason,error_message
+            FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number
+            """,
+            (workstream_id,),
+        ).fetchall()
         reviews = con.execute(
             "SELECT * FROM reviews WHERE workstream_id=? ORDER BY id", (workstream_id,)
         ).fetchall()
@@ -614,6 +650,20 @@ def workstream_show(workstream_id: int):
         console.print(f"  review #{review['id']}: {review['review_type']} — {review['result']}")
         if review["issues"]:
             console.print(f"    {escape(review['issues'])}")
+    for iteration in iterations:
+        progress = "material progress" if iteration["material_progress"] else "no progress"
+        console.print(
+            f"  iteration {iteration['iteration_number']}: {iteration['operation']} -> "
+            f"entity #{iteration['target_entity_id']} | {iteration['status']} | {progress} | "
+            f"duplicates {iteration['duplicate_count']}"
+        )
+        console.print(f"    why: {escape(iteration['rationale'])}")
+        if iteration["attack_outcome"] != "not_applicable":
+            console.print(f"    attack outcome: {iteration['attack_outcome']}")
+        if iteration["stop_reason"]:
+            console.print(f"    stop: {escape(iteration['stop_reason'])}")
+        if iteration["error_message"]:
+            console.print(f"    error: {escape(iteration['error_message'])}")
     for call in calls:
         console.print(
             f"  model call: {call['provider']} / {call['model']} | {call['purpose']} | "

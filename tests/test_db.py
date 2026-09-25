@@ -196,7 +196,7 @@ def test_current_v01_state_is_backfilled_once_into_graph(monkeypatch, tmp_path):
         ("papers", 4),
     ]
     assert "workstream_id" in api_columns
-    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5]
+    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5, 6]
     assert count == 2
 
 
@@ -249,6 +249,13 @@ def test_v04_migration_adds_develop_type_and_preserves_workstream_calls(
             INSERT INTO workstreams(
                 project_id,workstream_type,goal,status,summary,created_at,updated_at
             ) VALUES(1,'develop','Advance the idea','active','','t','t')
+            """
+        )
+        con.execute(
+            """
+            INSERT INTO workstreams(
+                project_id,workstream_type,goal,status,summary,created_at,updated_at
+            ) VALUES(1,'research','Run bounded controller','active','','t','t')
             """
         )
         version = con.execute("PRAGMA user_version").fetchone()[0]

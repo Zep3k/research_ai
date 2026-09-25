@@ -19,4 +19,4 @@ Constraints:
 14. Do not add autonomous agent swarms, a vector database, or a graph database without evaluation evidence.
 15. Never label a theorem or proof "verified" merely because an LLM found no flaw.
 
-Current phase: development is frozen after the bounded graph-backed `attack` and `develop` workflows. Evaluate reconstructed states from a completed research project before adding another workflow or major feature. The V0.1 `investigate` workflow remains only as compatibility functionality.
+Current phase: development is frozen after the bounded graph-backed single-step workflows and iterative `research` controller. Evaluate reconstructed states from a completed research project before adding another workflow or major feature. The V0.1 `investigate` workflow remains only as compatibility functionality.
