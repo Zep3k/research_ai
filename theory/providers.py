@@ -3,6 +3,7 @@ import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from dotenv import load_dotenv
+from pydantic import BaseModel
 from .errors import ConfigurationError
 from .models import ModelResult
 
@@ -69,7 +70,13 @@ class Provider(ABC):
 
     @abstractmethod
     def complete(
-        self, *, model: str, prompt: str, effort: str = "high", max_output_tokens: int
+        self,
+        *,
+        model: str,
+        prompt: str,
+        effort: str = "high",
+        max_output_tokens: int,
+        response_model: type[BaseModel] | None = None,
     ) -> ModelResult:
         raise NotImplementedError
 
@@ -84,23 +91,41 @@ class OpenAIProvider(Provider):
         self.client = OpenAI()
 
     def complete(
-        self, *, model: str, prompt: str, effort: str = "high", max_output_tokens: int
+        self,
+        *,
+        model: str,
+        prompt: str,
+        effort: str = "high",
+        max_output_tokens: int,
+        response_model: type[BaseModel] | None = None,
     ) -> ModelResult:
         get_model_spec(model, self.name)
+        request = {
+            "model": model,
+            "input": prompt,
+            "reasoning": {"effort": effort},
+            "max_output_tokens": max_output_tokens,
+        }
+        if response_model is not None:
+            from openai.lib._parsing._responses import type_to_text_format_param
+
+            request["text"] = {"format": type_to_text_format_param(response_model)}
         response = self.client.responses.create(
-            model=model,
-            input=prompt,
-            reasoning={"effort": effort},
-            max_output_tokens=max_output_tokens,
+            **request,
         )
         usage = getattr(response, "usage", None)
         inp = int(getattr(usage, "input_tokens", 0) or 0)
         out = int(getattr(usage, "output_tokens", 0) or 0)
+        status = str(getattr(response, "status", "completed") or "completed")
+        incomplete_details = getattr(response, "incomplete_details", None)
+        incomplete_reason = getattr(incomplete_details, "reason", None)
         return ModelResult(
             text=response.output_text or "",
             input_tokens=inp,
             output_tokens=out,
             cost_usd=estimate_cost(model, inp, out),
+            response_status=status,
+            incomplete_reason=incomplete_reason,
         )
 
 
@@ -114,7 +139,13 @@ class AnthropicProvider(Provider):
         self.client = anthropic.Anthropic()
 
     def complete(
-        self, *, model: str, prompt: str, effort: str = "high", max_output_tokens: int
+        self,
+        *,
+        model: str,
+        prompt: str,
+        effort: str = "high",
+        max_output_tokens: int,
+        response_model: type[BaseModel] | None = None,
     ) -> ModelResult:
         get_model_spec(model, self.name)
         message = self.client.messages.create(

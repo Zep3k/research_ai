@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from .config import Config
 from .db import connect, monthly_spend, utcnow
-from .errors import BudgetExceededError, TheoryError
+from .errors import BudgetExceededError, ModelOutputError, TheoryError
 from .models import ModelResult
 from .providers import conservative_call_cost
 
@@ -74,7 +76,7 @@ def _finish_call(
                 result.input_tokens if result else 0,
                 result.output_tokens if result else 0,
                 result.cost_usd if result else 0.0,
-                "completed" if result else "failed",
+                "failed" if error else "completed",
                 str(error)[:2000] if error else None,
                 result.text if result else None,
                 call_id,
@@ -93,6 +95,7 @@ def call_model(
     prompt: str,
     max_output_tokens: int,
     estimated_max_cost_usd: float,
+    response_model: type[BaseModel] | None = None,
 ) -> ModelResult:
     call_id = _start_call(
         run_id=run_id,
@@ -108,9 +111,29 @@ def call_model(
             prompt=prompt,
             effort="high",
             max_output_tokens=max_output_tokens,
+            response_model=response_model,
         )
     except Exception as exc:
         _finish_call(call_id, result=None, error=exc)
         raise TheoryError(f"{provider_name} {purpose} call failed: {exc}") from exc
+    if result.response_status != "completed":
+        provider_label = "OpenAI" if provider_name == "openai" else provider_name
+        if result.response_status == "incomplete":
+            reason = result.incomplete_reason or "unknown reason"
+            detail = (
+                "max_output_tokens exhausted"
+                if reason == "max_output_tokens"
+                else reason
+            )
+            error = ModelOutputError(
+                f"{provider_label} response was incomplete: {detail}."
+            )
+        else:
+            error = ModelOutputError(
+                f"{provider_label} response did not complete "
+                f"(status: {result.response_status})."
+            )
+        _finish_call(call_id, result=result, error=error)
+        raise error
     _finish_call(call_id, result=result)
     return result

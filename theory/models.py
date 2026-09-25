@@ -72,3 +72,5 @@ class ModelResult(StructuredModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     cost_usd: float = Field(default=0.0, ge=0)
+    response_status: str = "completed"
+    incomplete_reason: str | None = None

@@ -24,7 +24,7 @@ from .providers import get_model_spec, get_provider
 from .research_context import ResearchContext, for_workstream
 
 
-RESEARCH_MAX_OUTPUT_TOKENS = 12_000
+RESEARCH_MAX_OUTPUT_TOKENS = 32_000
 MAX_CONTROLLER_CALLS = 20
 OPERATIONS = ("develop", "attack", "synthesize", "prove")
 ROOT_TARGET_TYPES = {
@@ -161,7 +161,7 @@ class ResearchStepReport(BaseModel):
     operation: Literal["develop", "attack", "synthesize", "prove"]
     target_entity_id: int = Field(gt=0)
     summary: str = Field(min_length=1, max_length=4_000)
-    artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=10)
+    artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
     consumed_entity_ids: list[int] = Field(default_factory=list, max_length=8)
     addressed_obligation_ids: list[int] = Field(default_factory=list, max_length=12)
     attack_outcome: Literal[
@@ -595,6 +595,8 @@ EPISTEMIC AND WRITE RULES
 - Do not claim novelty, correctness, verification, or a completed proof.
 - New output may use only inference, speculation, or unresolved as epistemic_status.
 - Every artifact needs a stable lowercase material_key naming its mathematical content.
+- Return at most 4 substantive artifacts; return fewer when the operation does not justify four.
+- Keep each reasoning_summary concise and technical rather than essay-length.
 - Do not restate an existing entity or existing material_key. Rephrasing is not progress.
 - Every artifact must reference the selected target in related_entity_ids.
 - addressed_obligation_ids means a concrete candidate argument was produced; it does not mean
@@ -1140,6 +1142,9 @@ def research(
                 prompt=prompt,
                 max_output_tokens=RESEARCH_MAX_OUTPUT_TOKENS,
                 estimated_max_cost_usd=estimated_max_cost,
+                response_model=(
+                    ResearchStepReport if provider_name == "openai" else None
+                ),
             )
             calls_made += 1
             report = parse_json_model(result.text, ResearchStepReport)

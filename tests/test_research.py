@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 from theory.cli import app
 from theory.config import Config
-from theory.db import connect, initialize
+from theory.db import connect, initialize, monthly_spend
 from theory.errors import BudgetExceededError, ModelOutputError, TheoryError
 from theory.graph import (
     add_entity,
@@ -16,6 +16,7 @@ from theory.graph import (
 from theory.models import ModelResult
 from theory.research import (
     OperationChoice,
+    RESEARCH_MAX_OUTPUT_TOKENS,
     ResearchStepReport,
     _research_prompt,
     _validate_step_report,
@@ -189,6 +190,21 @@ def test_non_synthesis_prompts_require_empty_consumed_ids(operation):
     assert '"consumed_entity_ids": []' in prompt
 
 
+def test_research_prompt_and_schema_bound_artifact_output():
+    prompt = _research_prompt(
+        MinimalResearchContext(),
+        {"id": 1},
+        OperationChoice("develop", 1, "Regression test"),
+    )
+
+    assert "Return at most 4 substantive artifacts" in prompt
+    assert "Keep each reasoning_summary concise and technical" in prompt
+    assert (
+        ResearchStepReport.model_json_schema()["properties"]["artifacts"]["maxItems"]
+        == 4
+    )
+
+
 @pytest.mark.parametrize(
     ("operation", "attack_outcome", "error"),
     [
@@ -217,6 +233,37 @@ def test_attack_outcome_validation_remains_operation_specific(
 
     with pytest.raises(ModelOutputError, match=error):
         _validate_step_report(report, MinimalResearchContext(), choice)
+
+
+@pytest.mark.parametrize(
+    ("operation", "target_entity_id", "error"),
+    [
+        ("attack", 1, "Research output chose 'attack', expected 'develop'"),
+        ("develop", 2, "Research output targeted entity #2, expected #1"),
+    ],
+)
+def test_semantic_validation_rejects_incorrect_operation_or_target(
+    operation, target_entity_id, error
+):
+    report = ResearchStepReport(
+        operation=operation,
+        target_entity_id=target_entity_id,
+        summary="Invalid semantic report.",
+        artifacts=[],
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[],
+        attack_outcome="inconclusive" if operation == "attack" else "not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+    with pytest.raises(ModelOutputError, match=error):
+        _validate_step_report(
+            report,
+            MinimalResearchContext(1, 2),
+            OperationChoice("develop", 1, "Regression test"),
+        )
 
 
 def synthesis_report(consumed_entity_ids):
@@ -393,6 +440,11 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
     assert outcome.stop_reason == "candidate_survived_attack"
     assert outcome.final_status == "completed"
     assert len(provider.calls) == 3
+    assert all(
+        call["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS
+        for call in provider.calls
+    )
+    assert all(call["response_model"] is ResearchStepReport for call in provider.calls)
     assert all(
         "UNRELATED PROJECT HISTORY SENTINEL" not in call["prompt"]
         for call in provider.calls
@@ -768,6 +820,132 @@ def test_provider_and_validation_failures_are_recorded_consistently(
         ).fetchone()
     assert latest_iteration["status"] == "error"
     assert latest_call["status"] == "completed"
+
+
+def test_incomplete_openai_response_is_not_parsed_and_retains_usage(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, _ = make_research_workstream()
+
+    class IncompleteProvider:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, **kwargs):
+            self.calls.append(kwargs)
+            return ModelResult(
+                text='{"operation": "develop", "summary": "cut off',
+                input_tokens=1_234,
+                output_tokens=31_999,
+                cost_usd=0.644916,
+                response_status="incomplete",
+                incomplete_reason="max_output_tokens",
+            )
+
+    provider = IncompleteProvider()
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    def parsing_must_not_run(*args, **kwargs):
+        raise AssertionError("incomplete output must not reach JSON parsing")
+
+    monkeypatch.setattr("theory.research.parse_json_model", parsing_must_not_run)
+
+    with pytest.raises(
+        ModelOutputError,
+        match="OpenAI response was incomplete: max_output_tokens exhausted",
+    ):
+        research(workstream, "openai", max_calls=1)
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0]["max_output_tokens"] == 32_000
+    assert provider.calls[0]["response_model"] is ResearchStepReport
+    with connect() as con:
+        call = con.execute("SELECT * FROM api_calls").fetchone()
+        iteration = con.execute("SELECT * FROM research_iterations").fetchone()
+        artifact_count = con.execute(
+            "SELECT COUNT(*) FROM workstream_entities WHERE workstream_id=? AND role='created'",
+            (workstream,),
+        ).fetchone()[0]
+    assert call["status"] == "failed"
+    assert call["input_tokens"] == 1_234
+    assert call["output_tokens"] == 31_999
+    assert call["cost_usd"] == pytest.approx(0.644916)
+    assert call["response_text"].endswith('"cut off')
+    assert "max_output_tokens exhausted" in call["error_message"]
+    assert monthly_spend() == pytest.approx(0.644916)
+    assert iteration["status"] == "error"
+    assert artifact_count == 0
+
+
+def test_anthropic_research_keeps_json_parsing_path(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+
+    def responder(decision, _):
+        return step_report(
+            decision,
+            [
+                artifact(
+                    "finding",
+                    "A concise Anthropic-backed controller finding.",
+                    "anthropic_json_path_finding",
+                    [target],
+                )
+            ],
+        )
+
+    provider = DynamicProvider(responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "anthropic", max_calls=1)
+
+    assert outcome.calls_made == 1
+    assert provider.calls[0]["response_model"] is None
+
+
+def test_reactivated_research_retries_operation_after_errored_iteration(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, _ = make_research_workstream("Theorem", "Concrete theorem")
+
+    def invalid_responder(decision, _):
+        assert decision["operation"] == "attack"
+        response = step_report(decision, [], attack_outcome="inconclusive")
+        response["operation"] = "develop"
+        return response
+
+    first_provider = DynamicProvider(invalid_responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: first_provider)
+    with pytest.raises(ModelOutputError, match="expected 'attack'"):
+        research(workstream, "openai", max_calls=1)
+
+    with connect() as con:
+        con.execute(
+            "UPDATE workstreams SET status='active',summary='' WHERE id=?",
+            (workstream,),
+        )
+
+    def valid_responder(decision, _):
+        assert decision["operation"] == "attack"
+        return step_report(decision, [], attack_outcome="inconclusive")
+
+    second_provider = DynamicProvider(valid_responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: second_provider)
+
+    outcome = research(workstream, "openai", max_calls=1)
+
+    assert outcome.calls_made == 1
+    assert len(second_provider.calls) == 1
+    with connect() as con:
+        iterations = con.execute(
+            "SELECT operation,status FROM research_iterations ORDER BY iteration_number"
+        ).fetchall()
+    assert [(row["operation"], row["status"]) for row in iterations] == [
+        ("attack", "error"),
+        ("attack", "completed"),
+    ]
 
 
 def test_research_cli_and_workstream_show_make_no_extra_call(monkeypatch, tmp_path):

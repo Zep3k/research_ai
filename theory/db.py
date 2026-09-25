@@ -887,8 +887,7 @@ def monthly_spend() -> float:
         row = con.execute(
             """
             SELECT COALESCE(SUM(cost_usd),0) AS total FROM api_calls
-            WHERE status = 'completed'
-              AND strftime('%Y-%m', created_at) = strftime('%Y-%m','now')
+            WHERE strftime('%Y-%m', created_at) = strftime('%Y-%m','now')
             """
         ).fetchone()
         return float(row["total"])
