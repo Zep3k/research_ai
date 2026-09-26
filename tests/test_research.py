@@ -164,6 +164,18 @@ def add_linked_research_entity(
     return entity_id
 
 
+def mark_candidate_attempt(candidate_id, obligation_id, *, addressed=True):
+    with connect() as con:
+        add_relation(con, candidate_id, "ATTEMPTS", obligation_id)
+        if addressed:
+            set_attribute(
+                con,
+                candidate_id,
+                "addresses_obligation_ids",
+                json.dumps([obligation_id]),
+            )
+
+
 class MinimalResearchContext:
     sources = ()
 
@@ -812,6 +824,30 @@ def test_explicit_open_question_is_an_open_proof_obligation(monkeypatch, tmp_pat
     assert _open_obligation_ids(context, workstream, target) == (obligation,)
 
 
+def test_legacy_candidate_survived_attack_state_remains_actionable(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "A candidate survived, but the obligation is not controller-complete",
+        proof_obligation=True,
+    )
+    with connect() as con:
+        set_attribute(
+            con,
+            obligation,
+            "research_obligation_state",
+            "candidate_survived_attack",
+        )
+
+    context = for_workstream(workstream)
+
+    assert _open_obligation_ids(context, workstream, target) == (obligation,)
+
+
 def test_open_obligation_prioritizes_newest_relevant_unattacked_proof_attempt(
     monkeypatch, tmp_path
 ):
@@ -1101,6 +1137,202 @@ def test_critical_attack_keeps_obligation_actionable(monkeypatch, tmp_path):
     assert outcome.stop_reason == "max_calls_exhausted"
     assert _open_obligation_ids(context, workstream, target) == (obligation,)
     assert context.attributes[obligation]["research_obligation_state"] == "challenged"
+    assert context.attributes[attempt]["research_attack_state"] == "challenged"
+
+
+def test_multiple_candidate_attack_histories_remain_separate(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Prove obligation fourteen",
+        proof_obligation=True,
+    )
+    candidate_c = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Candidate C",
+        related_entity_ids=(obligation,),
+    )
+    candidate_b = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Candidate B",
+        related_entity_ids=(obligation,),
+    )
+    candidate_a = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Candidate A",
+        related_entity_ids=(obligation,),
+    )
+    for candidate_id in (candidate_a, candidate_b, candidate_c):
+        mark_candidate_attempt(candidate_id, obligation)
+
+    def responder(decision, _):
+        candidate_id = decision["target_entity_id"]
+        assert decision["operation"] == "attack"
+        assert decision["focus_obligation_id"] == obligation
+        if candidate_id in {candidate_a, candidate_b}:
+            return step_report(
+                decision,
+                [
+                    artifact(
+                        "obstruction",
+                        f"Candidate {candidate_id} has a critical gap.",
+                        f"candidate_{candidate_id}_critical_gap",
+                        [candidate_id],
+                        branch_status="blocked",
+                        epistemic_status="inference",
+                    )
+                ],
+                attack_outcome="critical_issue",
+            )
+        assert candidate_id == candidate_c
+        return step_report(decision, [], attack_outcome="no_critical_issue")
+
+    provider = DynamicProvider(responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "openai", max_calls=4)
+    context = for_workstream(workstream)
+
+    assert outcome.calls_made == 3
+    assert outcome.stop_reason == "candidate_survived_attack"
+    assert context.attributes[candidate_a]["research_attack_state"] == "challenged"
+    assert context.attributes[candidate_b]["research_attack_state"] == "challenged"
+    assert context.attributes[candidate_c]["research_attack_state"] == "survived_attack"
+    assert context.attributes[obligation]["research_obligation_state"] == "resolved_candidate"
+    assert context.attributes[obligation]["research_surviving_candidate_id"] == str(
+        candidate_c
+    )
+    assert "verified" not in {
+        context.attributes[candidate_a]["research_attack_state"],
+        context.attributes[candidate_b]["research_attack_state"],
+        context.attributes[candidate_c]["research_attack_state"],
+        context.attributes[obligation]["research_obligation_state"],
+    }
+    with connect() as con:
+        iterations = con.execute(
+            """
+            SELECT target_entity_id,attack_outcome FROM research_iterations
+            ORDER BY iteration_number
+            """
+        ).fetchall()
+        reviews = con.execute(
+            "SELECT result,issues FROM reviews ORDER BY id"
+        ).fetchall()
+    assert [(row["target_entity_id"], row["attack_outcome"]) for row in iterations] == [
+        (candidate_a, "critical_issue"),
+        (candidate_b, "critical_issue"),
+        (candidate_c, "no_critical_issue"),
+    ]
+    assert [row["result"] for row in reviews] == [
+        "issue_found",
+        "issue_found",
+        "no_flaw_found",
+    ]
+    assert f"entity #{candidate_a}" in reviews[0]["issues"]
+    assert f"entity #{candidate_b}" in reviews[1]["issues"]
+    assert f"entity #{candidate_c}" in reviews[2]["issues"]
+
+
+def test_surviving_structurally_incomplete_candidate_does_not_close_obligation(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Complete the remaining proof obligation",
+        proof_obligation=True,
+    )
+    candidate = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Candidate without the strong addressed marker",
+        related_entity_ids=(obligation,),
+    )
+    mark_candidate_attempt(candidate, obligation, addressed=False)
+
+    provider = DynamicProvider(
+        lambda decision, _: step_report(
+            decision, [], attack_outcome="no_critical_issue"
+        )
+    )
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "openai", max_calls=1)
+    context = for_workstream(workstream)
+
+    assert outcome.stop_reason == "max_calls_exhausted"
+    assert context.attributes[candidate]["research_attack_state"] == "survived_attack"
+    assert context.attributes[obligation]["research_obligation_state"] == "open"
+    assert "research_surviving_candidate_id" not in context.attributes[obligation]
+    assert _open_obligation_ids(context, workstream, target) == (obligation,)
+
+
+def test_global_survived_attack_stop_requires_every_obligation_complete(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, _ = make_research_workstream()
+    first_obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "First proof obligation",
+        proof_obligation=True,
+    )
+    second_obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Second proof obligation",
+        proof_obligation=True,
+    )
+    first_candidate = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "First complete candidate",
+        related_entity_ids=(first_obligation,),
+    )
+    second_candidate = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Second complete candidate",
+        related_entity_ids=(second_obligation,),
+    )
+    mark_candidate_attempt(first_candidate, first_obligation)
+    mark_candidate_attempt(second_candidate, second_obligation)
+
+    provider = DynamicProvider(
+        lambda decision, _: step_report(
+            decision, [], attack_outcome="no_critical_issue"
+        )
+    )
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "openai", max_calls=3)
+    context = for_workstream(workstream)
+
+    assert outcome.calls_made == 2
+    assert outcome.stop_reason == "candidate_survived_attack"
+    assert [
+        decision_from_prompt(call["prompt"])["focus_obligation_id"]
+        for call in provider.calls
+    ] == [first_obligation, second_obligation]
+    for obligation_id, candidate_id in (
+        (first_obligation, first_candidate),
+        (second_obligation, second_candidate),
+    ):
+        assert (
+            context.attributes[obligation_id]["research_obligation_state"]
+            == "resolved_candidate"
+        )
+        assert context.attributes[obligation_id][
+            "research_surviving_candidate_id"
+        ] == str(candidate_id)
 
 
 def test_prove_cannot_emit_free_standing_attempt_while_obligation_stays_open():
@@ -1316,13 +1548,30 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
         status = con.execute(
             "SELECT status FROM workstreams WHERE id=?", (workstream,)
         ).fetchone()[0]
-        obligation_state = con.execute(
+        obligation_row = con.execute(
             """
-            SELECT ea.value FROM entity_attributes ea
+            SELECT e.id,ea.value FROM entity_attributes ea
             JOIN entities e ON e.id=ea.entity_id
             WHERE e.entity_type='OpenQuestion'
               AND ea.key='research_obligation_state'
             """
+        ).fetchone()
+        proof_attempt_id = con.execute(
+            "SELECT id FROM entities WHERE entity_type='ProofAttempt'"
+        ).fetchone()[0]
+        surviving_candidate_id = con.execute(
+            """
+            SELECT value FROM entity_attributes
+            WHERE entity_id=? AND key='research_surviving_candidate_id'
+            """,
+            (obligation_row["id"],),
+        ).fetchone()[0]
+        candidate_attack_state = con.execute(
+            """
+            SELECT value FROM entity_attributes
+            WHERE entity_id=? AND key='research_attack_state'
+            """,
+            (proof_attempt_id,),
         ).fetchone()[0]
         summary = con.execute(
             "SELECT summary FROM workstreams WHERE id=?", (workstream,)
@@ -1356,9 +1605,12 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
     assert attempts[0]["trust_state"] == "quarantined"
     assert review["result"] == "no_flaw_found"
     assert status == "completed"
-    assert obligation_state == "candidate_survived_attack"
+    assert obligation_row["value"] == "resolved_candidate"
+    assert surviving_candidate_id == str(proof_attempt_id)
+    assert candidate_attack_state == "survived_attack"
     assert "not proof verification" in summary
-    assert "verified" not in obligation_state
+    assert "verified" not in obligation_row["value"]
+    assert "verified" not in candidate_attack_state
 
 
 def test_prove_is_selected_only_for_a_precise_candidate(monkeypatch, tmp_path):
@@ -1467,6 +1719,7 @@ def test_proving_candidate_creates_attempt_that_is_attacked_not_proved(
     assert proof_attempt_id != target
     context = for_workstream(workstream)
     assert context.attributes[obligation]["research_obligation_state"] == "challenged"
+    assert context.attributes[proof_attempt_id]["research_attack_state"] == "inconclusive"
     assert obligation in _open_obligation_ids(context, workstream, target)
 
 

@@ -294,13 +294,15 @@ theory workstream show 3
 
 The choice, target, and rationale are persisted in `research_iterations` before the operation call. The model must echo that choice; it cannot redirect the controller. Synthesis must echo and reference every required consumed entity. All prompts contain only `research_context.for_workstream(...)`, the deterministic decision, and no retrieval or chat history.
 
-Each strict response contains typed artifacts, a stable `material_key`, in-context entity/source references, provisional epistemic status, addressed-obligation candidates, attack outcome, unresolved points, and any request for human judgment. New objects and generated `ATTEMPTS` relations pass through the write gate as `quarantined` and attach to the workstream. `ATTEMPTS` means that a candidate argument was recorded; it does not resolve the obligation. The local obligation lifecycle distinguishes open, pending-attack, challenged, survived-one-bounded-attack, and blocked states, and contains no mathematically verified state.
+Each strict response contains typed artifacts, a stable `material_key`, in-context entity/source references, provisional epistemic status, addressed-obligation candidates, attack outcome, unresolved points, and any request for human judgment. New objects and generated `ATTEMPTS` relations pass through the write gate as `quarantined` and attach to the workstream. `ATTEMPTS` means that a candidate argument was recorded; it does not resolve the obligation. Each attacked candidate stores its own `research_attack_state` (`challenged`, `inconclusive`, or `survived_attack`), while the separate obligation lifecycle uses `open`, `candidate_pending_attack`, `challenged`, `resolved_candidate`, and `blocked`. No state means mathematically verified.
+
+`resolved_candidate` is a controller-complete, non-verifying state. It requires the exact attacked `ProofAttempt` or `Lemma` to have an active `ATTEMPTS` edge, direct obligation references, the stronger addressed-obligation marker, a completed `no_critical_issue` attack, and no unresolved critical issue on that same candidate. The obligation stores that entity as `research_surviving_candidate_id`; failures on other candidates remain on those candidate entities and in iteration/review history.
 
 Failed or refuted branches persist as `FailedApproach`; blocked branches persist as terminal `Obstruction` evidence; new actionable proof obligations persist separately as explicitly marked `OpenQuestion` entities. A blocked obstruction is not itself another proof obligation. A deterministic duplicate gate rejects repeated material keys and high-overlap normalized statements. Rejected rephrasing is not material progress.
 
 The controller stops when:
 
-- a focused candidate receives its bounded attack and reports `no_critical_issue`, leaving no other actionable obligation—recorded explicitly as a non-verifying result;
+- every proof obligation reaches `resolved_candidate` through its own structurally complete candidate and bounded `no_critical_issue` attack—recorded explicitly as a non-verifying result;
 - every recorded branch is blocked, failed, or refuted;
 - two consecutive iterations create no substantive non-duplicate object;
 - the response says human scientific judgment is required;

@@ -56,7 +56,7 @@ CRITICAL_ARTIFACT_TYPES = {"counterexample", "obstruction", "failed_approach"}
 PROOF_ARTIFACT_TYPES = {"lemma", "proof_attempt"}
 TERMINAL_BRANCH_STATES = {"blocked", "failed", "refuted"}
 LIVE_BRANCH_STATES = {"promising", "unresolved"}
-INACTIVE_OBLIGATION_STATES = {"blocked", "candidate_survived_attack"}
+INACTIVE_OBLIGATION_STATES = {"blocked", "resolved_candidate"}
 PRECISE_ENTITY_TYPES = {"Theorem", "Lemma", "ProofAttempt"}
 SYNTHESIS_INPUT_TYPES = {
     "Assumption",
@@ -325,6 +325,18 @@ def _completed_for_target(history: tuple[dict, ...], operation: str, entity_id: 
     )
 
 
+def _completed_no_issue_attack(
+    history: tuple[dict, ...], candidate_id: int
+) -> bool:
+    return any(
+        row["status"] == "completed"
+        and row["operation"] == "attack"
+        and int(row["target_entity_id"]) == candidate_id
+        and row.get("attack_outcome") == "no_critical_issue"
+        for row in history
+    )
+
+
 def _stored_id_set(raw: object) -> frozenset[int]:
     if not isinstance(raw, str):
         return frozenset()
@@ -414,6 +426,100 @@ def _open_obligation_ids(
         if _attribute(context, entity_id, "research_obligation_state")
         not in INACTIVE_OBLIGATION_STATES
     )
+
+
+def _candidate_has_unresolved_critical_issue(
+    context: ResearchContext, candidate_id: int
+) -> bool:
+    prior_attack_state = _attribute(context, candidate_id, "research_attack_state")
+    if prior_attack_state in {"challenged", "inconclusive"}:
+        return True
+    if any(
+        entity["entity_type"] in {"Counterexample", "Obstruction", "FailedApproach"}
+        and entity["status"] == "active"
+        and candidate_id
+        in _stored_id_set(
+            context.attributes.get(int(entity["id"]), {}).get("related_entity_ids")
+        )
+        for entity in context.entities
+    ):
+        return True
+    return any(
+        (
+            relation["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"}
+            and int(relation["target_entity_id"]) == candidate_id
+        )
+        or (
+            relation["relation_type"] == "FAILS_AT"
+            and int(relation["source_entity_id"]) == candidate_id
+        )
+        for relation in context.relations
+    )
+
+
+def _candidate_meets_obligation_closure_structure(
+    context: ResearchContext, candidate_id: int, obligation_id: int
+) -> bool:
+    candidate = next(
+        (entity for entity in context.entities if int(entity["id"]) == candidate_id),
+        None,
+    )
+    if (
+        candidate is None
+        or candidate["entity_type"] not in {"ProofAttempt", "Lemma"}
+        or candidate["status"] != "active"
+        or candidate["trust_state"] == "contradicted"
+    ):
+        return False
+    attrs = context.attributes.get(candidate_id, {})
+    if obligation_id not in _stored_id_set(attrs.get("related_entity_ids")):
+        return False
+    if obligation_id not in _stored_id_set(attrs.get("addresses_obligation_ids")):
+        return False
+    return any(
+        relation["relation_type"] == "ATTEMPTS"
+        and int(relation["source_entity_id"]) == candidate_id
+        and int(relation["target_entity_id"]) == obligation_id
+        for relation in context.relations
+    )
+
+
+def _candidate_can_complete_obligation_after_attack(
+    context: ResearchContext, candidate_id: int, obligation_id: int
+) -> bool:
+    return _candidate_meets_obligation_closure_structure(
+        context, candidate_id, obligation_id
+    ) and not _candidate_has_unresolved_critical_issue(context, candidate_id)
+
+
+def _all_obligations_have_completed_candidates(
+    context: ResearchContext,
+    history: tuple[dict, ...],
+    workstream_id: int,
+    primary_entity_id: int,
+) -> bool:
+    obligation_ids = _obligation_ids(context, workstream_id, primary_entity_id)
+    if not obligation_ids:
+        return False
+    for obligation_id in obligation_ids:
+        attrs = context.attributes.get(obligation_id, {})
+        if attrs.get("research_obligation_state") != "resolved_candidate":
+            return False
+        try:
+            candidate_id = int(attrs["research_surviving_candidate_id"])
+        except (KeyError, TypeError, ValueError):
+            return False
+        if (
+            _attribute(context, candidate_id, "research_attack_state")
+            != "survived_attack"
+            or not _completed_no_issue_attack(history, candidate_id)
+            or not _candidate_meets_obligation_closure_structure(
+                context, candidate_id, obligation_id
+            )
+            or _candidate_has_unresolved_critical_issue(context, candidate_id)
+        ):
+            return False
+    return True
 
 
 def _branch_states(
@@ -1270,6 +1376,17 @@ def _persist_step(
                 "no_critical_issue": "no_flaw_found",
                 "inconclusive": "inconclusive",
             }[report.attack_outcome]
+            candidate_attack_state = {
+                "critical_issue": "challenged",
+                "inconclusive": "inconclusive",
+                "no_critical_issue": "survived_attack",
+            }[report.attack_outcome]
+            set_attribute(
+                con,
+                choice.target_entity_id,
+                "research_attack_state",
+                candidate_attack_state,
+            )
             add_review(
                 con,
                 "counterexample_attempt",
@@ -1283,11 +1400,22 @@ def _persist_step(
                 model=model,
             )
             if choice.focus_obligation_id is not None:
-                obligation_state = {
-                    "critical_issue": "challenged",
-                    "inconclusive": "challenged",
-                    "no_critical_issue": "candidate_survived_attack",
-                }[report.attack_outcome]
+                obligation_state = "challenged"
+                if report.attack_outcome == "no_critical_issue":
+                    if _candidate_can_complete_obligation_after_attack(
+                        context,
+                        choice.target_entity_id,
+                        choice.focus_obligation_id,
+                    ):
+                        obligation_state = "resolved_candidate"
+                        set_attribute(
+                            con,
+                            choice.focus_obligation_id,
+                            "research_surviving_candidate_id",
+                            str(choice.target_entity_id),
+                        )
+                    else:
+                        obligation_state = "open"
                 set_attribute(
                     con,
                     choice.focus_obligation_id,
@@ -1577,6 +1705,13 @@ def research(
         if (
             choice.operation == "attack"
             and report.attack_outcome == "no_critical_issue"
+            and choice.focus_obligation_id is not None
+            and _all_obligations_have_completed_candidates(
+                context_after,
+                _history(workstream_id),
+                workstream_id,
+                int(primary["id"]),
+            )
             and not _open_obligation_ids(
                 context_after, workstream_id, int(primary["id"])
             )
@@ -1587,8 +1722,9 @@ def research(
                 status="completed",
                 stop_reason="candidate_survived_attack",
                 detail=(
-                    "No actionable graph-recorded proof obligation remains after the bounded "
-                    "candidate survived one attack; this is not proof verification."
+                    "Every graph-recorded proof obligation has an explicitly linked candidate "
+                    "that survived its completed bounded attack without an unresolved issue on "
+                    "that same candidate; this is not proof verification."
                 ),
             )
             return ResearchOutcome(
