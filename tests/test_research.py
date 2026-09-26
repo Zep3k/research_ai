@@ -209,13 +209,14 @@ def test_attack_prompt_excludes_not_applicable_attack_outcome():
         OperationChoice("attack", 1, "Regression test"),
     )
 
-    assert (
-        'attack_outcome MUST be "critical_issue", "no_critical_issue", or "inconclusive"; '
-        'it MUST NOT be "not_applicable".' in prompt
-    )
-    assert (
-        '"attack_outcome": "critical_issue|no_critical_issue|inconclusive"' in prompt
-    )
+    assert "ATTACK OUTCOME PRECEDENCE" in prompt
+    assert '1. CONCRETE DEFECT FOUND: use "critical_issue".' in prompt
+    assert '2. NO CONCRETE DEFECT, BUT MATERIAL UNCERTAINTY REMAINS: use "inconclusive".' in prompt
+    assert '3. NEITHER A CONCRETE DEFECT NOR MATERIAL UNCERTAINTY: use "no_critical_issue".' in prompt
+    assert "could_not_determine non-empty" in prompt
+    assert '"attack_outcome": "no_critical_issue"' in prompt
+    assert '"artifacts": []' in prompt
+    assert "critical_issue|no_critical_issue|inconclusive" not in prompt
     assert '"attack_outcome": "not_applicable"' not in prompt
 
 
@@ -273,7 +274,10 @@ def test_non_synthesis_prompts_require_empty_consumed_ids(operation):
     assert decision["required_consumed_entity_ids"] == []
     assert decision["required_artifact_related_entity_ids"] == [1]
     assert '"consumed_entity_ids": []' in prompt
-    assert '"related_entity_ids": [1]' in prompt
+    if operation == "attack":
+        assert '"artifacts": []' in prompt
+    else:
+        assert '"related_entity_ids": [1]' in prompt
     assert "minimum required related_entity_ids" not in prompt
 
 
@@ -471,6 +475,125 @@ def test_attack_outcome_validation_remains_operation_specific(
 
     with pytest.raises(ModelOutputError, match=error):
         _validate_step_report(report, MinimalResearchContext(), choice)
+
+
+@pytest.mark.parametrize(
+    ("attack_outcome", "has_critical_artifact", "has_uncertainty"),
+    [
+        (outcome, critical, uncertainty)
+        for outcome in ("critical_issue", "inconclusive", "no_critical_issue")
+        for critical in (False, True)
+        for uncertainty in (False, True)
+    ],
+)
+def test_attack_output_contract_all_artifact_uncertainty_combinations(
+    attack_outcome, has_critical_artifact, has_uncertainty
+):
+    report = ResearchStepReport(
+        operation="attack",
+        target_entity_id=1,
+        summary="Bounded adversarial pass.",
+        artifacts=(
+            [
+                artifact(
+                    "obstruction",
+                    "A concrete invalid step blocks this candidate.",
+                    "attack_contract_concrete_obstruction",
+                    [1],
+                    branch_status="blocked",
+                )
+            ]
+            if has_critical_artifact
+            else []
+        ),
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[],
+        attack_outcome=attack_outcome,
+        could_not_determine=(
+            ["The boundary case remains materially unresolved."]
+            if has_uncertainty
+            else []
+        ),
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+    valid = (
+        (attack_outcome == "critical_issue" and has_critical_artifact)
+        or (
+            attack_outcome == "inconclusive"
+            and not has_critical_artifact
+            and has_uncertainty
+        )
+        or (
+            attack_outcome == "no_critical_issue"
+            and not has_critical_artifact
+            and not has_uncertainty
+        )
+    )
+
+    if valid:
+        _validate_step_report(
+            report,
+            MinimalResearchContext(),
+            OperationChoice("attack", 1, "Regression test"),
+        )
+        return
+
+    if attack_outcome == "critical_issue":
+        error = "critical_issue requires a concrete"
+    elif attack_outcome == "inconclusive":
+        error = (
+            "Critical attack artifacts require"
+            if has_critical_artifact
+            else "inconclusive requires non-empty could_not_determine"
+        )
+    else:
+        error = "no_critical_issue cannot accompany"
+    with pytest.raises(ModelOutputError, match=error):
+        _validate_step_report(
+            report,
+            MinimalResearchContext(),
+            OperationChoice("attack", 1, "Regression test"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "branch_status"),
+    [
+        ("counterexample", None),
+        ("obstruction", "blocked"),
+        ("failed_approach", "failed"),
+    ],
+)
+def test_critical_issue_accepts_each_concrete_defect_type(
+    artifact_type, branch_status
+):
+    report = ResearchStepReport(
+        operation="attack",
+        target_entity_id=1,
+        summary="A concrete defect was established.",
+        artifacts=[
+            artifact(
+                artifact_type,
+                f"Concrete {artifact_type} found by the bounded attack.",
+                f"attack_contract_{artifact_type}",
+                [1],
+                branch_status=branch_status,
+            )
+        ],
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[],
+        attack_outcome="critical_issue",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+    _validate_step_report(
+        report,
+        MinimalResearchContext(),
+        OperationChoice("attack", 1, "Regression test"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -1697,7 +1820,12 @@ def test_proving_candidate_creates_attempt_that_is_attacked_not_proved(
             )
         assert call_number == 2
         assert decision["operation"] == "attack"
-        return step_report(decision, [], attack_outcome="inconclusive")
+        return step_report(
+            decision,
+            [],
+            attack_outcome="inconclusive",
+            unresolved=["The remaining implication could not be determined."],
+        )
 
     provider = DynamicProvider(responder)
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
@@ -1804,7 +1932,12 @@ def test_attack_is_reserved_for_concrete_candidates(
     def responder(decision, _):
         assert decision["operation"] == expected_operation
         if expected_operation == "attack":
-            return step_report(decision, [], attack_outcome="inconclusive")
+            return step_report(
+                decision,
+                [],
+                attack_outcome="inconclusive",
+                unresolved=["The boundary behavior remains undetermined."],
+            )
         return step_report(
             decision,
             [
@@ -1887,6 +2020,88 @@ def test_duplicate_outputs_are_rejected_and_two_stagnant_iterations_stop(
         count = con.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
     assert [(row[0], row[1]) for row in iterations] == [(0, 1), (0, 1)]
     assert count == 2
+
+
+def test_reactivated_stagnated_workstream_gets_a_fresh_stagnation_window(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    with connect() as con:
+        existing = add_entity(
+            con,
+            "Finding",
+            "Existing count",
+            body="The quorum overlap has size at least n minus two t.",
+        )
+        set_attribute(con, existing, "research_material_key", "quorum_overlap_count")
+        link_workstream_entity(con, workstream, existing, "created")
+
+    def duplicate_responder(decision, _):
+        assert decision["operation"] == "develop"
+        return step_report(
+            decision,
+            [
+                artifact(
+                    "parameter_analysis",
+                    "The quorum overlap has size at least n minus two t.",
+                    "quorum_overlap_count",
+                    [target],
+                    epistemic_status="inference",
+                )
+            ],
+        )
+
+    first_provider = DynamicProvider(duplicate_responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: first_provider)
+
+    first_outcome = research(workstream, "openai", max_calls=6)
+
+    assert first_outcome.calls_made == 2
+    assert first_outcome.stop_reason == "stagnation"
+    with connect() as con:
+        historical_rows = [
+            tuple(row)
+            for row in con.execute(
+                "SELECT * FROM research_iterations ORDER BY id"
+            ).fetchall()
+        ]
+        con.execute(
+            "UPDATE workstreams SET status='active',summary='' WHERE id=?",
+            (workstream,),
+        )
+
+    second_provider = DynamicProvider(duplicate_responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: second_provider)
+
+    second_outcome = research(workstream, "openai", max_calls=6)
+
+    assert second_outcome.calls_made == 2
+    assert len(second_provider.calls) == 2
+    assert second_outcome.stop_reason == "stagnation"
+    with connect() as con:
+        all_rows = [
+            tuple(row)
+            for row in con.execute(
+                "SELECT * FROM research_iterations ORDER BY id"
+            ).fetchall()
+        ]
+        iteration_states = con.execute(
+            """
+            SELECT iteration_number,status,material_progress,duplicate_count,stop_reason
+            FROM research_iterations ORDER BY iteration_number
+            """
+        ).fetchall()
+        call_count = con.execute("SELECT COUNT(*) FROM api_calls").fetchone()[0]
+    assert all_rows[:2] == historical_rows
+    assert len(all_rows) == 4
+    assert [tuple(row) for row in iteration_states] == [
+        (1, "completed", 0, 1, None),
+        (2, "completed", 0, 1, "stagnation"),
+        (3, "completed", 0, 1, None),
+        (4, "completed", 0, 1, "stagnation"),
+    ]
+    assert call_count == 4
 
 
 def test_max_calls_is_a_hard_bound_and_new_material_is_persisted(monkeypatch, tmp_path):
@@ -2188,7 +2403,12 @@ def test_reactivated_research_retries_operation_after_errored_iteration(
 
     def valid_responder(decision, _):
         assert decision["operation"] == "attack"
-        return step_report(decision, [], attack_outcome="inconclusive")
+        return step_report(
+            decision,
+            [],
+            attack_outcome="inconclusive",
+            unresolved=["The retry still cannot determine the boundary case."],
+        )
 
     second_provider = DynamicProvider(valid_responder)
     monkeypatch.setattr("theory.research.get_provider", lambda _: second_provider)

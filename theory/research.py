@@ -834,8 +834,10 @@ def _operation_instructions(choice: OperationChoice) -> str:
     if choice.operation == "attack":
         return (
             "Attack this concrete candidate for counterexamples, invalid steps, boundary cases, "
-            "or hidden assumptions. Set attack_outcome precisely. An empty no_critical_issue "
-            "result means only that this pass found no critical issue, never verification."
+            "or hidden assumptions. Apply the attack-outcome precedence exactly: a concrete "
+            "defect is critical_issue; otherwise material unresolved uncertainty is "
+            "inconclusive; only a pass with neither is no_critical_issue. The last outcome "
+            "means only that this bounded pass found no critical issue, never verification."
         )
     if choice.operation == "synthesize":
         consumed = ", ".join(f"#{value}" for value in choice.consumed_entity_ids)
@@ -907,11 +909,16 @@ def _research_prompt(
 ) -> str:
     payload = context.as_model_payload()
     if choice.operation == "attack":
-        attack_outcome_instruction = (
-            '- For attack, attack_outcome MUST be "critical_issue", "no_critical_issue", or '
-            '"inconclusive"; it MUST NOT be "not_applicable".'
-        )
-        attack_outcome_example = "critical_issue|no_critical_issue|inconclusive"
+        attack_outcome_instruction = '''ATTACK OUTCOME PRECEDENCE
+Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
+1. CONCRETE DEFECT FOUND: use "critical_issue". This requires at least one counterexample,
+   obstruction, or failed_approach artifact. Use this outcome even if uncertainty also remains.
+2. NO CONCRETE DEFECT, BUT MATERIAL UNCERTAINTY REMAINS: use "inconclusive". Emit no critical
+   artifact and make could_not_determine non-empty with the exact unresolved uncertainty.
+3. NEITHER A CONCRETE DEFECT NOR MATERIAL UNCERTAINTY: use "no_critical_issue". Emit no critical
+   artifact and set could_not_determine to []. This means only that this bounded attack found no
+   critical issue; it is never verification.'''
+        attack_outcome_example = "no_critical_issue"
     else:
         attack_outcome_instruction = (
             '- For non-attack operations, attack_outcome MUST be exactly "not_applicable".'
@@ -944,6 +951,21 @@ def _research_prompt(
         )
     else:
         focus_reference_instruction = ""
+    if choice.operation == "attack":
+        artifact_output_example = "[]"
+    else:
+        artifact_output_example = f'''[
+    {{
+      "artifact_type": "consequence|lemma|protocol_component|parameter_analysis|proof_obligation|open_question|proof_attempt|synthesis|counterexample|obstruction|failed_approach|finding",
+      "statement": "precise substantive research object",
+      "reasoning_summary": "derivation, argument, calculation, or exact failure point",
+      "material_key": "stable_lowercase_concept_key",
+      "epistemic_status": "inference|speculation|unresolved",
+      "related_entity_ids": {json.dumps(required_artifact_related_entity_ids)},
+      "source_ids": [],
+      "branch_status": null
+    }}
+  ]'''
     operation_output_instructions = _synthesis_output_instructions(
         choice, required_artifact_related_entity_ids
     )
@@ -1021,18 +1043,7 @@ Return ONLY strict JSON with exactly this shape:
   "operation": "{choice.operation}",
   "target_entity_id": {choice.target_entity_id},
   "summary": "technical result of this one bounded operation",
-  "artifacts": [
-    {{
-      "artifact_type": "consequence|lemma|protocol_component|parameter_analysis|proof_obligation|open_question|proof_attempt|synthesis|counterexample|obstruction|failed_approach|finding",
-      "statement": "precise substantive research object",
-      "reasoning_summary": "derivation, argument, calculation, or exact failure point",
-      "material_key": "stable_lowercase_concept_key",
-      "epistemic_status": "inference|speculation|unresolved",
-      "related_entity_ids": {json.dumps(required_artifact_related_entity_ids)},
-      "source_ids": [],
-      "branch_status": null
-    }}
-  ],
+  "artifacts": {artifact_output_example},
   "consumed_entity_ids": {json.dumps(required_consumed_entity_ids)},
   "addressed_obligation_ids": [],
   "attack_outcome": "{attack_outcome_example}",
@@ -1141,6 +1152,15 @@ def _validate_step_report(
             raise ModelOutputError(
                 "critical_issue requires a concrete counterexample, obstruction, or failed approach."
             )
+        if report.attack_outcome == "inconclusive":
+            if critical:
+                raise ModelOutputError(
+                    "Critical attack artifacts require attack_outcome='critical_issue'."
+                )
+            if not report.could_not_determine:
+                raise ModelOutputError(
+                    "inconclusive requires non-empty could_not_determine uncertainty."
+                )
         if report.attack_outcome == "no_critical_issue" and (
             critical or report.could_not_determine
         ):
@@ -1515,24 +1535,6 @@ def _record_iteration_error(
         )
 
 
-def _consecutive_no_progress(workstream_id: int) -> int:
-    with connect() as con:
-        rows = con.execute(
-            """
-            SELECT material_progress FROM research_iterations
-            WHERE workstream_id=? AND status='completed'
-            ORDER BY iteration_number DESC LIMIT 2
-            """,
-            (workstream_id,),
-        ).fetchall()
-    count = 0
-    for row in rows:
-        if row["material_progress"]:
-            break
-        count += 1
-    return count
-
-
 def _finalize(
     *,
     workstream_id: int,
@@ -1586,6 +1588,7 @@ def research(
     iteration_ids: list[int] = []
     artifact_ids: list[int] = []
     last_iteration_id: int | None = None
+    current_run_consecutive_no_progress = 0
     provider = None
 
     while calls_made < max_calls:
@@ -1609,23 +1612,6 @@ def research(
                 "all_branches_blocked_or_refuted",
                 "blocked",
             )
-        if _consecutive_no_progress(workstream_id) >= 2:
-            _finalize(
-                workstream_id=workstream_id,
-                iteration_id=last_iteration_id,
-                status="blocked",
-                stop_reason="stagnation",
-                detail="Two consecutive completed iterations created no substantive new object.",
-            )
-            return ResearchOutcome(
-                workstream_id,
-                calls_made,
-                tuple(iteration_ids),
-                tuple(artifact_ids),
-                "stagnation",
-                "blocked",
-            )
-
         choice = choose_next_operation(context, workstream_id, primary, history)
         prompt = _research_prompt(context, primary, choice)
         estimated_max_cost = budget_guard(
@@ -1685,6 +1671,10 @@ def research(
             raise
 
         artifact_ids.extend(persisted.artifact_ids)
+        if persisted.material_progress:
+            current_run_consecutive_no_progress = 0
+        else:
+            current_run_consecutive_no_progress += 1
         context_after = for_workstream(workstream_id)
         if report.human_judgment_required:
             _finalize(
@@ -1755,7 +1745,7 @@ def research(
                 "all_branches_blocked_or_refuted",
                 "blocked",
             )
-        if _consecutive_no_progress(workstream_id) >= 2:
+        if current_run_consecutive_no_progress >= 2:
             _finalize(
                 workstream_id=workstream_id,
                 iteration_id=iteration_id,
