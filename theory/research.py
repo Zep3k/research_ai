@@ -56,6 +56,7 @@ CRITICAL_ARTIFACT_TYPES = {"counterexample", "obstruction", "failed_approach"}
 PROOF_ARTIFACT_TYPES = {"lemma", "proof_attempt"}
 TERMINAL_BRANCH_STATES = {"blocked", "failed", "refuted"}
 LIVE_BRANCH_STATES = {"promising", "unresolved"}
+INACTIVE_OBLIGATION_STATES = {"blocked", "candidate_survived_attack"}
 PRECISE_ENTITY_TYPES = {"Theorem", "Lemma", "ProofAttempt"}
 SYNTHESIS_INPUT_TYPES = {
     "Assumption",
@@ -246,6 +247,7 @@ class OperationChoice:
     rationale: str
     consumed_entity_ids: tuple[int, ...] = ()
     open_obligation_ids: tuple[int, ...] = ()
+    focus_obligation_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -379,12 +381,6 @@ def _obligation_ids(
     context: ResearchContext, workstream_id: int, primary_entity_id: int
 ) -> tuple[int, ...]:
     linked = _linked_ids(context, workstream_id)
-    blocked_by = {
-        int(link["entity_id"])
-        for link in context.workstream_links
-        if int(link["workstream_id"]) == workstream_id
-        and link["role"] == "blocked_by"
-    }
     obligations: list[int] = []
     for entity in context.entities:
         entity_id = int(entity["id"])
@@ -399,44 +395,24 @@ def _obligation_ids(
             attrs.get("research_artifact_type") == "proof_obligation"
             or attrs.get("develop_item_type") == "proof_obligation"
             or attrs.get("is_proof_obligation", "").casefold() == "true"
-            or entity_id in blocked_by
         )
-        is_blocked_obligation = entity["entity_type"] == "Obstruction" and (
-            entity_id in blocked_by
-            or attrs.get("is_proof_obligation", "").casefold() == "true"
-            or attrs.get("research_branch_status") == "blocked"
-            or attrs.get("develop_branch_status") == "blocked"
+        is_explicit_legacy_obstruction_obligation = (
+            entity["entity_type"] == "Obstruction"
+            and attrs.get("is_proof_obligation", "").casefold() == "true"
         )
-        if is_open_obligation or is_blocked_obligation:
+        if is_open_obligation or is_explicit_legacy_obstruction_obligation:
             obligations.append(entity_id)
     return tuple(sorted(obligations))
-
-
-def _addressed_obligation_ids(context: ResearchContext) -> set[int]:
-    addressed = {
-        int(relation["target_entity_id"])
-        for relation in context.relations
-        if relation["relation_type"] == "ATTEMPTS"
-    }
-    for entity_id, attrs in context.attributes.items():
-        raw = attrs.get("addresses_obligation_ids")
-        if raw is None:
-            continue
-        try:
-            addressed.update(int(value) for value in json.loads(raw))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-    return addressed
 
 
 def _open_obligation_ids(
     context: ResearchContext, workstream_id: int, primary_entity_id: int
 ) -> tuple[int, ...]:
-    addressed = _addressed_obligation_ids(context)
     return tuple(
         entity_id
         for entity_id in _obligation_ids(context, workstream_id, primary_entity_id)
-        if entity_id not in addressed
+        if _attribute(context, entity_id, "research_obligation_state")
+        not in INACTIVE_OBLIGATION_STATES
     )
 
 
@@ -457,6 +433,47 @@ def _all_branches_terminal(context: ResearchContext, workstream_id: int) -> bool
     return bool(states) and not any(state in LIVE_BRANCH_STATES for state in states)
 
 
+def _entity_is_relevant_to_obligation(
+    context: ResearchContext, entity_id: int, obligation_id: int
+) -> bool:
+    """Use only explicit, shallow graph provenance to establish obligation relevance."""
+    attrs = context.attributes.get(entity_id, {})
+    if obligation_id in _stored_id_set(attrs.get("related_entity_ids")):
+        return True
+    if obligation_id in _stored_id_set(attrs.get("addresses_obligation_ids")):
+        return True
+    if obligation_id in _stored_id_set(attrs.get("research_related_obligation_ids")):
+        return True
+    if attrs.get("research_focus_obligation_id") == str(obligation_id):
+        return True
+
+    obligation_attrs = context.attributes.get(obligation_id, {})
+    if entity_id in _stored_id_set(obligation_attrs.get("related_entity_ids")):
+        return True
+
+    if any(
+        {
+            int(relation["source_entity_id"]),
+            int(relation["target_entity_id"]),
+        }
+        == {entity_id, obligation_id}
+        for relation in context.relations
+    ):
+        return True
+
+    return any(
+        {entity_id, obligation_id}
+        <= set(_stored_id_set(other_attrs.get("related_entity_ids")))
+        for other_attrs in context.attributes.values()
+    )
+
+
+def _has_terminal_branch_state(context: ResearchContext, entity_id: int) -> bool:
+    attrs = context.attributes.get(entity_id, {})
+    state = attrs.get("research_branch_status") or attrs.get("develop_branch_status")
+    return state in TERMINAL_BRANCH_STATES
+
+
 def _relevant_synthesis_inputs(
     context: ResearchContext,
     workstream_id: int,
@@ -470,7 +487,9 @@ def _relevant_synthesis_inputs(
         and int(entity["id"]) != obligation_id
         and entity["status"] == "active"
         and entity["trust_state"] != "contradicted"
+        and not _has_terminal_branch_state(context, int(entity["id"]))
         and entity["entity_type"] in SYNTHESIS_INPUT_TYPES
+        and _entity_is_relevant_to_obligation(context, int(entity["id"]), obligation_id)
     ]
     candidates.sort(
         key=lambda entity: (
@@ -479,6 +498,37 @@ def _relevant_synthesis_inputs(
         )
     )
     return tuple(int(entity["id"]) for entity in candidates[:4])
+
+
+def _relevant_prove_candidates(
+    context: ResearchContext,
+    history: tuple[dict, ...],
+    obligation_id: int,
+) -> tuple[dict, ...]:
+    if context.workstream is None:
+        return ()
+    workstream_id = int(context.workstream["id"])
+    linked = _linked_ids(context, workstream_id)
+    candidates = [
+        entity
+        for entity in context.entities
+        if int(entity["id"]) in linked
+        and entity["entity_type"] != "ProofAttempt"
+        and _is_precise_candidate(context, entity)
+        and not _completed_for_target(history, "prove", int(entity["id"]))
+        and _entity_is_relevant_to_obligation(
+            context, int(entity["id"]), obligation_id
+        )
+    ]
+    candidates.sort(
+        key=lambda entity: (
+            {"Lemma": 0, "Theorem": 1, "Technique": 2}.get(
+                entity["entity_type"], 3
+            ),
+            -int(entity["id"]),
+        )
+    )
+    return tuple(candidates)
 
 
 def _relevant_unattacked_proof_attempts(
@@ -503,10 +553,10 @@ def _relevant_unattacked_proof_attempts(
             or _completed_for_target(history, "attack", entity_id)
         ):
             continue
-        attrs = context.attributes.get(entity_id, {})
-        related_ids = _stored_id_set(attrs.get("related_entity_ids"))
-        addressed_ids = _stored_id_set(attrs.get("addresses_obligation_ids"))
-        if open_ids & (set(related_ids) | set(addressed_ids)):
+        if any(
+            _entity_is_relevant_to_obligation(context, entity_id, obligation_id)
+            for obligation_id in open_ids
+        ):
             candidates.append(entity)
     candidates.sort(key=lambda entity: -int(entity["id"]))
     return tuple(candidates)
@@ -544,8 +594,9 @@ def choose_next_operation(
     ]
 
     if open_obligations:
+        obligation_id = open_obligations[0]
         relevant_unattacked = _relevant_unattacked_proof_attempts(
-            context, history, open_obligations
+            context, history, (obligation_id,)
         )
         if relevant_unattacked:
             target_id = int(relevant_unattacked[0]["id"])
@@ -553,12 +604,13 @@ def choose_next_operation(
                 operation="attack",
                 target_entity_id=target_id,
                 open_obligation_ids=open_obligations,
+                focus_obligation_id=obligation_id,
                 rationale=(
-                    f"Proof attempt #{target_id} is linked to a currently open obligation "
+                    f"Proof attempt #{target_id} is linked to open obligation "
+                    f"#{obligation_id} "
                     "and has not yet received one bounded adversarial attack."
                 ),
             )
-        obligation_id = open_obligations[0]
         consumed = _relevant_synthesis_inputs(context, workstream_id, obligation_id)
         if len(consumed) >= 2 and _is_new_synthesis_input_set(
             history, obligation_id, consumed
@@ -568,17 +620,22 @@ def choose_next_operation(
                 target_entity_id=obligation_id,
                 consumed_entity_ids=consumed,
                 open_obligation_ids=open_obligations,
+                focus_obligation_id=obligation_id,
                 rationale=(
                     f"Open proof obligation #{obligation_id} has {len(consumed)} linked, "
                     "non-terminal artifacts that can be combined in one bounded synthesis."
                 ),
             )
-        if prove_candidates:
-            candidate_id = int(prove_candidates[0]["id"])
+        relevant_prove_candidates = _relevant_prove_candidates(
+            context, history, obligation_id
+        )
+        if relevant_prove_candidates:
+            candidate_id = int(relevant_prove_candidates[0]["id"])
             return OperationChoice(
                 operation="prove",
                 target_entity_id=candidate_id,
                 open_obligation_ids=open_obligations,
+                focus_obligation_id=obligation_id,
                 rationale=(
                     f"Precise candidate #{candidate_id} exists while proof obligation "
                     f"#{obligation_id} remains open; a rigorous proof attempt is the next "
@@ -587,11 +644,13 @@ def choose_next_operation(
             )
         return OperationChoice(
             operation="develop",
-            target_entity_id=primary_id,
+            target_entity_id=obligation_id,
             open_obligation_ids=open_obligations,
+            focus_obligation_id=obligation_id,
             rationale=(
-                f"Proof obligation #{obligation_id} is open, but the graph lacks either two "
-                "usable synthesis inputs or a precise candidate statement."
+                f"Proof obligation #{obligation_id} is open, but its branch lacks either two "
+                "relevant synthesis inputs or a relevant unproved precise candidate; refine "
+                "this obligation directly."
             ),
         )
 
@@ -654,6 +713,13 @@ def choose_next_operation(
 
 def _operation_instructions(choice: OperationChoice) -> str:
     if choice.operation == "develop":
+        if choice.focus_obligation_id is not None:
+            return (
+                f"Develop proof obligation #{choice.focus_obligation_id} directly. Produce a "
+                "concrete missing lemma, refined proof obligation, obstruction, failed "
+                "approach, or genuinely new protocol component tied to this obligation. Do "
+                "not escape to unrelated frontier material."
+            )
         return (
             "Derive a substantive consequence, lemma, protocol component, parameter analysis, "
             "or proof obligation. Explore a genuinely new branch. Preserve a failed branch as "
@@ -687,6 +753,12 @@ def _operation_instructions(choice: OperationChoice) -> str:
             "proof_obligation, or emit a counterexample, obstruction, or failed_approach. "
             "A free-standing proof_attempt that leaves every open obligation unchanged is not "
             "progress."
+        )
+    if choice.focus_obligation_id is not None:
+        instruction += (
+            f" This prove pass is focused on obligation #{choice.focus_obligation_id}. Every "
+            "lemma or proof_attempt emitted must reference both the prove target and that "
+            "focus obligation."
         )
     return instruction
 
@@ -740,13 +812,13 @@ def _research_prompt(
         )
         attack_outcome_example = "not_applicable"
     required_consumed_entity_ids = list(choice.consumed_entity_ids)
-    required_artifact_related_entity_ids = list(
-        dict.fromkeys(
-            [*choice.consumed_entity_ids, choice.target_entity_id]
-            if choice.operation == "synthesize"
-            else [choice.target_entity_id]
-        )
-    )
+    if choice.operation == "synthesize":
+        required_refs = [*choice.consumed_entity_ids, choice.target_entity_id]
+    elif choice.operation == "prove" and choice.focus_obligation_id is not None:
+        required_refs = [choice.target_entity_id, choice.focus_obligation_id]
+    else:
+        required_refs = [choice.target_entity_id]
+    required_artifact_related_entity_ids = list(dict.fromkeys(required_refs))
     if choice.operation == "synthesize":
         consumed_entity_instruction = (
             "- For synthesize, consumed_entity_ids MUST contain exactly the controller-selected "
@@ -757,6 +829,15 @@ def _research_prompt(
         consumed_entity_instruction = (
             "- For non-synthesis operations, consumed_entity_ids MUST be []."
         )
+    if choice.operation == "prove" and choice.focus_obligation_id is not None:
+        focus_reference_instruction = (
+            "- For this focused prove operation, every lemma or proof_attempt MUST include "
+            f"both target entity #{choice.target_entity_id} and focus obligation "
+            f"#{choice.focus_obligation_id} in related_entity_ids. This does not by itself "
+            "justify adding the obligation to addressed_obligation_ids."
+        )
+    else:
+        focus_reference_instruction = ""
     operation_output_instructions = _synthesis_output_instructions(
         choice, required_artifact_related_entity_ids
     )
@@ -768,6 +849,7 @@ def _research_prompt(
         "required_consumed_entity_ids": choice.consumed_entity_ids,
         "required_artifact_related_entity_ids": required_artifact_related_entity_ids,
         "currently_open_obligation_ids": choice.open_obligation_ids,
+        "focus_obligation_id": choice.focus_obligation_id,
     }
     return f'''You are executing one bounded operation in a human-directed theoretical-research workbench.
 
@@ -791,6 +873,7 @@ EPISTEMIC AND WRITE RULES
   this graph state.
 {attack_outcome_instruction}
 {consumed_entity_instruction}
+{focus_reference_instruction}
 {operation_output_instructions}
 
 ADDRESSED OBLIGATION RULES
@@ -890,6 +973,13 @@ def _validate_step_report(
     allowed_entity_ids = {int(entity["id"]) for entity in context.entities}
     allowed_source_ids = {int(source["id"]) for source in context.sources}
     obligation_ids = set(choice.open_obligation_ids)
+    if (
+        choice.focus_obligation_id is not None
+        and choice.focus_obligation_id not in obligation_ids
+    ):
+        raise ModelOutputError(
+            f"Controller focus obligation #{choice.focus_obligation_id} is not open."
+        )
     unknown_addressed = set(report.addressed_obligation_ids) - obligation_ids
     if unknown_addressed:
         raise ModelOutputError(
@@ -977,6 +1067,16 @@ def _validate_step_report(
     if choice.operation == "prove":
         if not report.artifacts:
             raise ModelOutputError("Prove must persist a proof attempt, obligation, or failure.")
+        if choice.focus_obligation_id is not None:
+            for index, artifact in enumerate(report.artifacts, start=1):
+                if (
+                    artifact.artifact_type in PROOF_ARTIFACT_TYPES
+                    and choice.focus_obligation_id not in artifact.related_entity_ids
+                ):
+                    raise ModelOutputError(
+                        f"Focused prove artifact {index} did not reference obligation "
+                        f"#{choice.focus_obligation_id}."
+                    )
         if choice.open_obligation_ids and not _has_meaningful_open_obligation_transition(
             report.artifacts,
             report.addressed_obligation_ids,
@@ -1100,12 +1200,20 @@ def _persist_step(
                 "related_entity_ids",
                 json.dumps(artifact.related_entity_ids),
             )
+            if choice.focus_obligation_id is not None:
+                set_attribute(
+                    con,
+                    entity_id,
+                    "research_focus_obligation_id",
+                    str(choice.focus_obligation_id),
+                )
             if artifact.branch_status is not None:
                 set_attribute(
                     con, entity_id, "research_branch_status", artifact.branch_status
                 )
             if artifact.artifact_type == "proof_obligation":
                 set_attribute(con, entity_id, "is_proof_obligation", "true")
+                set_attribute(con, entity_id, "research_obligation_state", "open")
             if artifact.artifact_type in {"lemma", "protocol_component", "proof_attempt"}:
                 set_attribute(con, entity_id, "precise_candidate", "true")
             link_workstream_entity(con, workstream_id, entity_id, "created")
@@ -1114,14 +1222,24 @@ def _persist_step(
             existing_keys.add(artifact.material_key)
             fingerprints.append(tokens)
 
-        for obligation_id in report.addressed_obligation_ids:
-            supporting_ids = [
-                entity_id
-                for artifact, entity_id in accepted
-                if artifact.artifact_type in PROOF_ARTIFACT_TYPES
-                and obligation_id in artifact.related_entity_ids
-            ]
-            for entity_id in supporting_ids:
+        pending_attack_obligation_ids: set[int] = set()
+        for artifact, entity_id in accepted:
+            if artifact.artifact_type not in PROOF_ARTIFACT_TYPES:
+                continue
+            addressed_ids = {
+                obligation_id
+                for obligation_id in report.addressed_obligation_ids
+                if obligation_id in artifact.related_entity_ids
+            }
+            attempted_ids = set(addressed_ids)
+            if artifact.artifact_type == "proof_attempt":
+                if (
+                    choice.focus_obligation_id is not None
+                    and choice.focus_obligation_id in artifact.related_entity_ids
+                ):
+                    attempted_ids.add(choice.focus_obligation_id)
+                pending_attack_obligation_ids.update(attempted_ids)
+            for obligation_id in sorted(attempted_ids):
                 add_relation(
                     con,
                     entity_id,
@@ -1130,12 +1248,21 @@ def _persist_step(
                     trust_state="quarantined",
                     generated_by_llm=True,
                 )
+            if addressed_ids:
                 set_attribute(
                     con,
                     entity_id,
                     "addresses_obligation_ids",
-                    json.dumps(report.addressed_obligation_ids),
+                    json.dumps(sorted(addressed_ids)),
                 )
+
+        for obligation_id in pending_attack_obligation_ids:
+            set_attribute(
+                con,
+                obligation_id,
+                "research_obligation_state",
+                "candidate_pending_attack",
+            )
 
         if choice.operation == "attack":
             review_result = {
@@ -1155,6 +1282,18 @@ def _persist_step(
                 provider=provider_name,
                 model=model,
             )
+            if choice.focus_obligation_id is not None:
+                obligation_state = {
+                    "critical_issue": "challenged",
+                    "inconclusive": "challenged",
+                    "no_critical_issue": "candidate_survived_attack",
+                }[report.attack_outcome]
+                set_attribute(
+                    con,
+                    choice.focus_obligation_id,
+                    "research_obligation_state",
+                    obligation_state,
+                )
 
         material_progress = bool(artifact_ids)
         if choice.operation == "prove" and choice.open_obligation_ids:
@@ -1324,7 +1463,9 @@ def research(
     while calls_made < max_calls:
         context = for_workstream(workstream_id)
         history = _history(workstream_id)
-        if _all_branches_terminal(context, workstream_id):
+        if _all_branches_terminal(
+            context, workstream_id
+        ) and not _open_obligation_ids(context, workstream_id, int(primary["id"])):
             _finalize(
                 workstream_id=workstream_id,
                 iteration_id=last_iteration_id,
@@ -1446,8 +1587,8 @@ def research(
                 status="completed",
                 stop_reason="candidate_survived_attack",
                 detail=(
-                    "All graph-recorded proof obligations were addressed and the subsequent "
-                    "bounded attack found no critical issue; this is not proof verification."
+                    "No actionable graph-recorded proof obligation remains after the bounded "
+                    "candidate survived one attack; this is not proof verification."
                 ),
             )
             return ResearchOutcome(
@@ -1458,7 +1599,11 @@ def research(
                 "candidate_survived_attack",
                 "completed",
             )
-        if _all_branches_terminal(context_after, workstream_id):
+        if _all_branches_terminal(
+            context_after, workstream_id
+        ) and not _open_obligation_ids(
+            context_after, workstream_id, int(primary["id"])
+        ):
             _finalize(
                 workstream_id=workstream_id,
                 iteration_id=iteration_id,

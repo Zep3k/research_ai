@@ -287,20 +287,20 @@ theory workstream show 3
 
 `--max-calls` is limited to 1–20. Every completed iteration makes exactly one provider call. A deterministic controller—not another model call—chooses the next operation from current linked graph state:
 
-- `develop` when the target is still vague or lacks an actionable proof/synthesis frontier;
-- `synthesize` when a specific open proof obligation has at least two usable linked artifacts;
-- `prove` only when a precise theorem, lemma, protocol, conjecture, or proof candidate exists;
-- `attack` only for a concrete theorem/lemma/protocol/proof candidate, prioritizing new proof attempts.
+- `attack` first when the focused obligation has a relevant proof attempt that has not yet received one bounded attack;
+- `synthesize` when that obligation has a genuinely new set of at least two directly relevant graph artifacts;
+- `prove` only when an unproved precise non-`ProofAttempt` candidate is deterministically connected to that obligation;
+- `develop` the obligation itself when none of those focused operations is available, or develop the primary object when no obligation is open.
 
 The choice, target, and rationale are persisted in `research_iterations` before the operation call. The model must echo that choice; it cannot redirect the controller. Synthesis must echo and reference every required consumed entity. All prompts contain only `research_context.for_workstream(...)`, the deterministic decision, and no retrieval or chat history.
 
-Each strict response contains typed artifacts, a stable `material_key`, in-context entity/source references, provisional epistemic status, addressed-obligation candidates, attack outcome, unresolved points, and any request for human judgment. New objects and generated `ATTEMPTS` relations pass through the write gate as `quarantined` and attach to the workstream. An addressed obligation means only that a concrete candidate lemma/proof attempt was recorded; it does not mean the obligation or theorem is verified.
+Each strict response contains typed artifacts, a stable `material_key`, in-context entity/source references, provisional epistemic status, addressed-obligation candidates, attack outcome, unresolved points, and any request for human judgment. New objects and generated `ATTEMPTS` relations pass through the write gate as `quarantined` and attach to the workstream. `ATTEMPTS` means that a candidate argument was recorded; it does not resolve the obligation. The local obligation lifecycle distinguishes open, pending-attack, challenged, survived-one-bounded-attack, and blocked states, and contains no mathematically verified state.
 
-Failed or refuted branches persist as `FailedApproach`; blocked branches persist as `Obstruction`; new proof obligations persist as `OpenQuestion`. A deterministic duplicate gate rejects repeated material keys and high-overlap normalized statements. Rejected rephrasing is not material progress.
+Failed or refuted branches persist as `FailedApproach`; blocked branches persist as terminal `Obstruction` evidence; new actionable proof obligations persist separately as explicitly marked `OpenQuestion` entities. A blocked obstruction is not itself another proof obligation. A deterministic duplicate gate rejects repeated material keys and high-overlap normalized statements. Rejected rephrasing is not material progress.
 
 The controller stops when:
 
-- addressed obligations are followed by an attack reporting `no_critical_issue`—recorded explicitly as a bounded, non-verifying result;
+- a focused candidate receives its bounded attack and reports `no_critical_issue`, leaving no other actionable obligation—recorded explicitly as a non-verifying result;
 - every recorded branch is blocked, failed, or refuted;
 - two consecutive iterations create no substantive non-duplicate object;
 - the response says human scientific judgment is required;

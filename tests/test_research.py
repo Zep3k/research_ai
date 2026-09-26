@@ -9,6 +9,7 @@ from theory.db import connect, initialize, monthly_spend
 from theory.errors import BudgetExceededError, ModelOutputError, TheoryError
 from theory.graph import (
     add_entity,
+    add_relation,
     create_workstream,
     link_workstream_entity,
     set_attribute,
@@ -19,6 +20,7 @@ from theory.research import (
     RESEARCH_MAX_OUTPUT_TOKENS,
     ResearchArtifact,
     ResearchStepReport,
+    _open_obligation_ids,
     _relevant_synthesis_inputs,
     _research_prompt,
     _validate_step_report,
@@ -143,6 +145,7 @@ def add_linked_research_entity(
     role="created",
     related_entity_ids=(),
     proof_obligation=False,
+    branch_status=None,
 ):
     with connect() as con:
         entity_id = add_entity(con, entity_type, title)
@@ -156,6 +159,8 @@ def add_linked_research_entity(
             )
         if proof_obligation:
             set_attribute(con, entity_id, "is_proof_obligation", "true")
+        if branch_status is not None:
+            set_attribute(con, entity_id, "research_branch_status", branch_status)
     return entity_id
 
 
@@ -258,6 +263,30 @@ def test_non_synthesis_prompts_require_empty_consumed_ids(operation):
     assert '"consumed_entity_ids": []' in prompt
     assert '"related_entity_ids": [1]' in prompt
     assert "minimum required related_entity_ids" not in prompt
+
+
+def test_focused_prove_prompt_requires_target_and_obligation_references():
+    choice = OperationChoice(
+        "prove",
+        27,
+        "Prove the obligation-specific candidate",
+        open_obligation_ids=(9,),
+        focus_obligation_id=9,
+    )
+
+    prompt = _research_prompt(
+        MinimalResearchContext(9, 27),
+        {"id": 1},
+        choice,
+    )
+    decision = decision_from_prompt(prompt)
+
+    assert decision["target_entity_id"] == 27
+    assert decision["focus_obligation_id"] == 9
+    assert decision["required_artifact_related_entity_ids"] == [27, 9]
+    assert "every lemma or proof_attempt MUST include both target entity #27" in prompt
+    assert "focus obligation #9" in prompt
+    assert "does not by itself justify adding the obligation" in prompt
 
 
 def test_research_prompt_and_schema_bound_artifact_output():
@@ -751,6 +780,38 @@ def test_non_synthesis_rejects_non_empty_consumed_ids(operation):
         )
 
 
+def test_blocked_obstruction_is_not_an_open_proof_obligation(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obstruction = add_linked_research_entity(
+        workstream,
+        "Obstruction",
+        "This branch cannot satisfy the overlap bound",
+        role="blocked_by",
+        branch_status="blocked",
+    )
+
+    context = for_workstream(workstream)
+
+    assert obstruction not in _open_obligation_ids(context, workstream, target)
+
+
+def test_explicit_open_question_is_an_open_proof_obligation(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Prove the remaining overlap inequality",
+    )
+    with connect() as con:
+        set_attribute(con, obligation, "research_artifact_type", "proof_obligation")
+
+    context = for_workstream(workstream)
+
+    assert _open_obligation_ids(context, workstream, target) == (obligation,)
+
+
 def test_open_obligation_prioritizes_newest_relevant_unattacked_proof_attempt(
     monkeypatch, tmp_path
 ):
@@ -774,6 +835,8 @@ def test_open_obligation_prioritizes_newest_relevant_unattacked_proof_attempt(
         "Second candidate proof",
         related_entity_ids=(obligation,),
     )
+    with connect() as con:
+        add_relation(con, newer_attempt, "ATTEMPTS", obligation)
 
     choice = current_choice(workstream, target)
 
@@ -808,6 +871,28 @@ def test_proof_attempt_is_never_selected_as_a_prove_target(monkeypatch, tmp_path
     )
 
 
+def test_unrelated_lemma_is_not_selected_for_open_obligation(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Resolve the conflict-selection step",
+        proof_obligation=True,
+    )
+    unrelated_lemma = add_linked_research_entity(
+        workstream,
+        "Lemma",
+        "A relay dissemination bound",
+    )
+
+    choice = current_choice(workstream, target)
+
+    assert choice.operation == "develop"
+    assert choice.target_entity_id == obligation
+    assert choice.target_entity_id != unrelated_lemma
+
+
 def test_attacked_attempt_allows_non_attempt_lemma_to_be_proved(
     monkeypatch, tmp_path
 ):
@@ -829,6 +914,7 @@ def test_attacked_attempt_allows_non_attempt_lemma_to_be_proved(
         workstream,
         "Lemma",
         "A precise composition lemma",
+        related_entity_ids=(obligation,),
     )
     context = for_workstream(workstream)
     consumed = _relevant_synthesis_inputs(context, workstream, obligation)
@@ -863,7 +949,12 @@ def test_synthesis_repeats_only_after_consumed_input_set_changes(
         "An attacked candidate proof",
         related_entity_ids=(obligation,),
     )
-    add_linked_research_entity(workstream, "Finding", "First relevant bound")
+    add_linked_research_entity(
+        workstream,
+        "Finding",
+        "First relevant bound",
+        related_entity_ids=(obligation,),
+    )
     attacked_history = [completed_history("attack", attempt)]
     first_choice = current_choice(workstream, target, attacked_history)
     assert first_choice.operation == "synthesize"
@@ -879,8 +970,18 @@ def test_synthesis_repeats_only_after_consumed_input_set_changes(
     repeated_choice = current_choice(workstream, target, same_inputs_history)
     assert repeated_choice.operation == "develop"
 
+    unrelated_input = add_linked_research_entity(
+        workstream, "Finding", "A new but unrelated dissemination fact"
+    )
+    unrelated_choice = current_choice(workstream, target, same_inputs_history)
+    assert unrelated_choice.operation == "develop"
+    assert unrelated_input not in unrelated_choice.consumed_entity_ids
+
     new_input = add_linked_research_entity(
-        workstream, "Finding", "A genuinely new relevant bound"
+        workstream,
+        "Finding",
+        "A genuinely new relevant bound",
+        related_entity_ids=(obligation,),
     )
     changed_choice = current_choice(workstream, target, same_inputs_history)
     assert changed_choice.operation == "synthesize"
@@ -890,7 +991,7 @@ def test_synthesis_repeats_only_after_consumed_input_set_changes(
     )
 
 
-def test_unrelated_unattacked_proof_attempt_is_not_prioritized(
+def test_attempts_relation_does_not_close_obligation_or_misroute_attack(
     monkeypatch, tmp_path
 ):
     init_workspace(monkeypatch, tmp_path)
@@ -914,6 +1015,7 @@ def test_unrelated_unattacked_proof_attempt_is_not_prioritized(
         related_entity_ids=(other_obligation,),
     )
     with connect() as con:
+        add_relation(con, unrelated_attempt, "ATTEMPTS", other_obligation)
         set_attribute(
             con,
             unrelated_attempt,
@@ -923,7 +1025,7 @@ def test_unrelated_unattacked_proof_attempt_is_not_prioritized(
 
     choice = current_choice(workstream, target)
 
-    assert choice.open_obligation_ids == (current_obligation,)
+    assert choice.open_obligation_ids == (current_obligation, other_obligation)
     assert not (
         choice.operation == "attack"
         and choice.target_entity_id == unrelated_attempt
@@ -953,6 +1055,52 @@ def test_completed_no_issue_attack_does_not_address_open_obligation(
     choice = current_choice(workstream, target, [attack])
 
     assert obligation in choice.open_obligation_ids
+
+
+def test_critical_attack_keeps_obligation_actionable(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligation = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Close the conflict-selection argument",
+        proof_obligation=True,
+    )
+    attempt = add_linked_research_entity(
+        workstream,
+        "ProofAttempt",
+        "Candidate conflict-selection argument",
+        related_entity_ids=(obligation,),
+    )
+
+    def responder(decision, _):
+        assert decision["operation"] == "attack"
+        assert decision["target_entity_id"] == attempt
+        assert decision["focus_obligation_id"] == obligation
+        return step_report(
+            decision,
+            [
+                artifact(
+                    "obstruction",
+                    "The candidate assumes an unavailable common conflict view.",
+                    "missing_common_conflict_view",
+                    [attempt],
+                    branch_status="blocked",
+                    epistemic_status="inference",
+                )
+            ],
+            attack_outcome="critical_issue",
+        )
+
+    provider = DynamicProvider(responder)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+
+    outcome = research(workstream, "openai", max_calls=1)
+    context = for_workstream(workstream)
+
+    assert outcome.stop_reason == "max_calls_exhausted"
+    assert _open_obligation_ids(context, workstream, target) == (obligation,)
+    assert context.attributes[obligation]["research_obligation_state"] == "challenged"
 
 
 def test_prove_cannot_emit_free_standing_attempt_while_obligation_stays_open():
@@ -985,6 +1133,41 @@ def test_prove_cannot_emit_free_standing_attempt_while_obligation_stays_open():
             MinimalResearchContext(1, 8),
             OperationChoice(
                 "prove", 1, "Regression test", open_obligation_ids=(8,)
+            ),
+        )
+
+
+def test_focused_prove_rejects_proof_artifact_missing_obligation_reference():
+    report = ResearchStepReport(
+        operation="prove",
+        target_entity_id=27,
+        summary="Candidate proof omitted its focus provenance.",
+        artifacts=[
+            artifact(
+                "proof_attempt",
+                "A candidate argument for the target lemma.",
+                "candidate_missing_focus_reference",
+                [27],
+            )
+        ],
+        consumed_entity_ids=[],
+        addressed_obligation_ids=[],
+        attack_outcome="not_applicable",
+        could_not_determine=[],
+        human_judgment_required=False,
+        human_judgment_reason=None,
+    )
+
+    with pytest.raises(ModelOutputError, match="did not reference obligation #9"):
+        _validate_step_report(
+            report,
+            MinimalResearchContext(9, 27),
+            OperationChoice(
+                "prove",
+                27,
+                "Regression test",
+                open_obligation_ids=(9,),
+                focus_obligation_id=9,
             ),
         )
 
@@ -1036,6 +1219,28 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
                 ],
             )
         if call_number == 2:
+            assert decision["operation"] == "develop"
+            assert decision["focus_obligation_id"] == selected
+            return step_report(
+                decision,
+                [
+                    artifact(
+                        "lemma",
+                        "The obligation-specific overlap lemma supplies an honest signer.",
+                        "focused_honest_overlap_lemma",
+                        [selected],
+                        epistemic_status="inference",
+                    ),
+                    artifact(
+                        "protocol_component",
+                        "Use an obligation-specific threshold certificate construction.",
+                        "focused_threshold_certificate_component",
+                        [selected],
+                        branch_status="promising",
+                    ),
+                ],
+            )
+        if call_number == 3:
             assert decision["operation"] == "synthesize"
             consumed = decision["required_consumed_entity_ids"]
             assert len(consumed) >= 2
@@ -1053,7 +1258,7 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
                 ],
                 addressed=[selected],
             )
-        assert call_number == 3
+        assert call_number == 4
         assert decision["operation"] == "attack"
         return step_report(
             decision,
@@ -1072,10 +1277,10 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
 
     outcome = research(workstream, "openai", max_calls=6)
 
-    assert outcome.calls_made == 3
+    assert outcome.calls_made == 4
     assert outcome.stop_reason == "candidate_survived_attack"
     assert outcome.final_status == "completed"
-    assert len(provider.calls) == 3
+    assert len(provider.calls) == 4
     assert all(
         call["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS
         for call in provider.calls
@@ -1111,8 +1316,20 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
         status = con.execute(
             "SELECT status FROM workstreams WHERE id=?", (workstream,)
         ).fetchone()[0]
+        obligation_state = con.execute(
+            """
+            SELECT ea.value FROM entity_attributes ea
+            JOIN entities e ON e.id=ea.entity_id
+            WHERE e.entity_type='OpenQuestion'
+              AND ea.key='research_obligation_state'
+            """
+        ).fetchone()[0]
+        summary = con.execute(
+            "SELECT summary FROM workstreams WHERE id=?", (workstream,)
+        ).fetchone()[0]
 
     assert [row["operation"] for row in iterations] == [
+        "develop",
         "develop",
         "synthesize",
         "attack",
@@ -1121,6 +1338,7 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
     assert all(row["status"] == "completed" for row in iterations)
     assert iterations[-1]["stop_reason"] == "candidate_survived_attack"
     assert [row["purpose"] for row in calls] == [
+        "research:develop",
         "research:develop",
         "research:synthesize",
         "research:attack",
@@ -1138,6 +1356,9 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
     assert attempts[0]["trust_state"] == "quarantined"
     assert review["result"] == "no_flaw_found"
     assert status == "completed"
+    assert obligation_state == "candidate_survived_attack"
+    assert "not proof verification" in summary
+    assert "verified" not in obligation_state
 
 
 def test_prove_is_selected_only_for_a_precise_candidate(monkeypatch, tmp_path):
@@ -1147,6 +1368,7 @@ def test_prove_is_selected_only_for_a_precise_candidate(monkeypatch, tmp_path):
         set_attribute(con, target, "precise_candidate", "true")
         obligation = add_entity(con, "OpenQuestion", "Establish the quorum inequality")
         set_attribute(con, obligation, "is_proof_obligation", "true")
+        set_attribute(con, obligation, "related_entity_ids", json.dumps([target]))
         link_workstream_entity(con, workstream, obligation, "created")
 
     def responder(decision, _):
@@ -1194,6 +1416,7 @@ def test_proving_candidate_creates_attempt_that_is_attacked_not_proved(
         workstream,
         "OpenQuestion",
         "Open obligation for candidate A",
+        related_entity_ids=(lemma,),
         proof_obligation=True,
     )
 
@@ -1242,9 +1465,12 @@ def test_proving_candidate_creates_attempt_that_is_attacked_not_proved(
         ("attack", proof_attempt_id),
     ]
     assert proof_attempt_id != target
+    context = for_workstream(workstream)
+    assert context.attributes[obligation]["research_obligation_state"] == "challenged"
+    assert obligation in _open_obligation_ids(context, workstream, target)
 
 
-def test_synthesize_targets_blocked_obligation_and_consumes_two_artifacts(
+def test_synthesize_targets_explicit_obligation_not_blocked_obstruction(
     monkeypatch, tmp_path
 ):
     init_workspace(monkeypatch, tmp_path)
@@ -1253,15 +1479,21 @@ def test_synthesize_targets_blocked_obligation_and_consumes_two_artifacts(
         lemma = add_entity(con, "Lemma", "First supporting lemma")
         technique = add_entity(con, "Technique", "Second supporting construction")
         blocker = add_entity(con, "Obstruction", "Missing composition argument")
+        obligation = add_entity(con, "OpenQuestion", "Resolve the composition gap")
+        set_attribute(con, blocker, "research_branch_status", "blocked")
+        set_attribute(con, obligation, "is_proof_obligation", "true")
+        set_attribute(con, lemma, "related_entity_ids", json.dumps([obligation]))
+        set_attribute(con, technique, "related_entity_ids", json.dumps([obligation]))
         link_workstream_entity(con, workstream, lemma, "evidence")
         link_workstream_entity(con, workstream, technique, "evidence")
         link_workstream_entity(con, workstream, blocker, "blocked_by")
+        link_workstream_entity(con, workstream, obligation, "created")
 
     def responder(decision, _):
         assert decision["operation"] == "synthesize"
-        assert decision["target_entity_id"] == blocker
+        assert decision["target_entity_id"] == obligation
         assert {lemma, technique} <= set(decision["required_consumed_entity_ids"])
-        related = [blocker, *decision["required_consumed_entity_ids"]]
+        related = [obligation, *decision["required_consumed_entity_ids"]]
         return step_report(
             decision,
             [
@@ -1292,7 +1524,7 @@ def test_synthesize_targets_blocked_obligation_and_consumes_two_artifacts(
         ).fetchone()
     assert (iteration["operation"], iteration["target_entity_id"]) == (
         "synthesize",
-        blocker,
+        obligation,
     )
     assert set(json.loads(iteration["consumed_entity_ids_json"])) >= {
         lemma,
@@ -1436,11 +1668,18 @@ def test_max_calls_is_a_hard_bound_and_new_material_is_persisted(monkeypatch, tm
 def test_max_calls_summary_reports_remaining_open_obligations(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, target = make_research_workstream()
-    add_linked_research_entity(
+    obligation = add_linked_research_entity(
         workstream,
         "OpenQuestion",
         "Unresolved proof obligation",
         proof_obligation=True,
+    )
+    add_linked_research_entity(
+        workstream,
+        "Obstruction",
+        "A different branch is terminally blocked",
+        role="blocked_by",
+        branch_status="blocked",
     )
 
     def responder(decision, _):
@@ -1452,7 +1691,7 @@ def test_max_calls_summary_reports_remaining_open_obligations(monkeypatch, tmp_p
                     "finding",
                     "A useful bound that does not yet close the obligation.",
                     "useful_nonclosing_bound",
-                    [target],
+                    [obligation],
                     epistemic_status="inference",
                 )
             ],
