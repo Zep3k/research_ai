@@ -29,6 +29,7 @@ from .graph import (
 from .papers import import_pdf
 from .paths import STATE_DIR, PAPERS_DIR, require_workspace
 from .research import MAX_CONTROLLER_CALLS, research as run_research
+from .research_progress import progress_event_kinds
 from .trust import EntityType, parse_enum
 from .workflows import investigate as run_investigation
 
@@ -629,9 +630,7 @@ def workstream_show(workstream_id: int):
         ).fetchall()
         iterations = con.execute(
             """
-            SELECT iteration_number,operation,target_entity_id,rationale,status,
-                   material_progress,duplicate_count,attack_outcome,stop_reason,error_message,
-                   selection_mode,legal_move_ids_json,selected_move_id,selection_rationale
+            SELECT *
             FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number
             """,
             (workstream_id,),
@@ -663,12 +662,26 @@ def workstream_show(workstream_id: int):
         if review["issues"]:
             console.print(f"    {escape(review['issues'])}")
     for iteration in iterations:
-        progress = "material progress" if iteration["material_progress"] else "no progress"
+        typed_progress = iteration["progress_class"] is not None
+        legacy_progress = "material progress" if iteration["material_progress"] else "no progress"
+        suffix = "" if typed_progress else f" | {legacy_progress} | duplicates {iteration['duplicate_count']}"
         console.print(
             f"  iteration {iteration['iteration_number']}: {iteration['operation']} -> "
-            f"entity #{iteration['target_entity_id']} | {iteration['status']} | {progress} | "
-            f"duplicates {iteration['duplicate_count']}"
+            f"entity #{iteration['target_entity_id']} | {iteration['status']}{suffix}"
         )
+        if typed_progress:
+            console.print(f"    progress: {iteration['progress_level']} / {iteration['progress_class']}")
+            resolution = "yes" if iteration["resolution_progress"] else "no"
+            console.print(
+                f"    obligations: {iteration['open_obligations_before']} -> "
+                f"{iteration['open_obligations_after']} | resolution progress: {resolution}"
+            )
+            kinds = progress_event_kinds(iteration["progress_events_json"]) or ()
+            console.print(f"    events: {', '.join(kinds)}")
+            console.print(
+                f"    artifacts accepted: {iteration['accepted_artifact_count']} | "
+                f"duplicates: {iteration['duplicate_count']}"
+            )
         console.print(f"    why: {escape(iteration['rationale'])}")
         if iteration["selection_mode"]:
             console.print(

@@ -377,8 +377,8 @@ without rewriting them; this milestone permits only that trusted registry model
 for strategy, excluding Sol, Astra and Anthropic models. A compact, deterministic
 `ResearchState` contains stored entity titles and lifecycle/trust/branch states,
 open obligations and their candidate IDs, exact legal moves, the last six
-completed/error iterations, and controller counts. It omits graph bodies and
-uses no generated summaries, retrieval, numerical ranking, or new progress metric.
+completed/error iterations with typed progress, and controller counts. It omits
+graph bodies and uses no generated summaries, retrieval, or numerical ranking.
 
 The prompt asks for the most informative next move toward the primary goal,
 considering falsifiable candidates, uncertainty, obligation closure and recent
@@ -435,11 +435,74 @@ Research attacks apply a strict outcome precedence: a concrete counterexample, o
 
 Failed or refuted branches persist as `FailedApproach`; blocked branches persist as terminal `Obstruction` evidence; new actionable proof obligations persist separately as explicitly marked `OpenQuestion` entities. A blocked obstruction is not itself another proof obligation. A deterministic duplicate gate rejects repeated material keys and high-overlap normalized statements. Rejected rephrasing is not material progress.
 
+Progress is classified locally from accepted, persisted controller events:
+
+```text
+execution result
+    ↓
+validation and duplicate filtering
+    ↓
+persistence of accepted artifacts and state transitions
+    ↓
+reload full graph → deterministic progress classification
+    ↓
+typed progress history → future strategist decisions
+```
+
+`ProgressEvent` records a kind plus entity and obligation IDs. All events are kept;
+`progress_class` summarizes them using this fixed precedence:
+`obligation_resolved`, `candidate_challenged`, `branch_closed`,
+`candidate_survived_attack`, `candidate_tested_inconclusive`, `candidate_created`,
+`obligation_created`, `frontier_expanded`, `duplicate_only`, `no_progress`.
+
+| Progress level | Persisted events |
+| --- | --- |
+| `closure` | An obligation reached `resolved_candidate`, a candidate was challenged by a critical attack, or an accepted artifact has a blocked/failed/refuted branch status. |
+| `validation` | A candidate survived an attack without obligation closure, or received an inconclusive attack. |
+| `construction` | An accepted `ProofAttempt` or `Lemma` gained an actual `ATTEMPTS` link to an open obligation through the existing persistence rules. |
+| `exploration` | A new proof obligation or otherwise unclassified substantive artifact was accepted. |
+| `none` | Duplicate-only or empty output with no meaningful attack event or state transition. |
+
+These levels describe events; they are not numerical scores or rules for choosing
+the next move. A standalone lemma without an obligation attempt is frontier
+expansion, not automatically an obligation candidate. Specific candidate,
+obligation, and terminal-artifact events do not also count as generic expansion.
+
+For new completed iterations, **`material_progress`** is the broad compatibility
+signal `progress_level != "none"`. **`resolution_progress`** is stricter: the number
+of open graph-recorded proof obligations actually decreased. Counts use the existing
+`_open_obligation_ids()` definition on full context before the operation and after
+committed persistence. They are never estimated as “before + created − resolved.”
+Historical `material_progress` values remain unchanged, and unknown typed metrics
+remain NULL rather than being inferred.
+
+**New artifact != obligation resolution.** An **inconclusive attack may still be
+validation progress**, even with zero artifacts. A new candidate plus a blocked
+obstruction records both `candidate_created` and `branch_closed`, summarized as
+`closure / branch_closed`; that need not reduce the open-obligation count. Even
+resolving one obligation while creating another does not constitute net resolution
+progress. None of these events means theorem verification.
+
+Each completed iteration stores the full event list, primary class, level, before/
+after open counts, counts of resolved/new obligations, created/tested candidates,
+closed branches, and accepted/duplicate artifacts. `workstream show` displays the
+class, level, event kinds, obligation counts, and resolution flag; legacy rows retain
+their material-progress display. The strategist receives compact event kinds and
+stored counters, not verbose event subjects, and is instructed to distinguish
+expansion, construction, testing, and convergence.
+
+The graph transaction records accepted IDs before progress is calculated. The
+iteration is marked completed only after valid metrics are saved. If classification
+fails, the iteration and workstream become `error`; committed artifacts remain
+linked to the error iteration, and the duplicate filter protects a later explicit
+rerun. No automatic retry occurs. Progress costs **$0** and adds no provider calls,
+model self-grading fields, routing changes, or stopping threshold.
+
 The controller stops when:
 
 - every proof obligation reaches `resolved_candidate` through its own structurally complete candidate and bounded `no_critical_issue` attack—recorded explicitly as a non-verifying result;
 - every recorded branch is blocked, failed, or refuted;
-- two consecutive iterations create no substantive non-duplicate object;
+- two consecutive iterations have no material progress (duplicate-only/empty output without meaningful testing);
 - the response says human scientific judgment is required;
 - the call limit is reached; or
 - the local budget guard refuses the next call.
@@ -448,7 +511,7 @@ Success or call-limit completion sets lifecycle `completed`; no live branch, sta
 
 ## V0.1 compatibility and migration
 
-The first open of an older database migrates it in place to schema version 9. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 10. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -471,6 +534,12 @@ Migration behavior is explicit:
     `selected_move_id`, `selection_rationale`, `strategy_provider`, `strategy_model`,
     and `focus_obligation_id` to `research_iterations`. Legacy decisions retain
     NULL for unknown metadata; no historical selection is fabricated or rewritten.
+15. Schema version 10 (`research_progress_metrics`) adds nullable progress class,
+    level, event JSON, resolution flag, open-obligation counts, resolved/new
+    obligation counts, created/tested candidate counts, closed-branch count, and
+    accepted-artifact count. Counts have non-negative checks and the resolution
+    flag is constrained to 0/1. Existing columns are unchanged; every new metric
+    stays NULL on historical rows. Migration is idempotent.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 

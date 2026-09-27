@@ -8,7 +8,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 RESEARCH_SELECTION_COLUMNS = {
     "selection_mode": "TEXT",
@@ -18,6 +18,21 @@ RESEARCH_SELECTION_COLUMNS = {
     "strategy_provider": "TEXT",
     "strategy_model": "TEXT",
     "focus_obligation_id": "INTEGER",
+}
+
+RESEARCH_PROGRESS_COLUMNS = {
+    "progress_class": "TEXT",
+    "progress_level": "TEXT",
+    "progress_events_json": "TEXT",
+    "resolution_progress": "INTEGER CHECK (resolution_progress IN (0,1))",
+    "open_obligations_before": "INTEGER CHECK (open_obligations_before >= 0)",
+    "open_obligations_after": "INTEGER CHECK (open_obligations_after >= 0)",
+    "resolved_obligation_count": "INTEGER CHECK (resolved_obligation_count >= 0)",
+    "new_obligation_count": "INTEGER CHECK (new_obligation_count >= 0)",
+    "candidate_created_count": "INTEGER CHECK (candidate_created_count >= 0)",
+    "candidate_tested_count": "INTEGER CHECK (candidate_tested_count >= 0)",
+    "closed_branch_count": "INTEGER CHECK (closed_branch_count >= 0)",
+    "accepted_artifact_count": "INTEGER CHECK (accepted_artifact_count >= 0)",
 }
 
 CALL_TELEMETRY_COLUMNS = {
@@ -291,6 +306,18 @@ CREATE TABLE IF NOT EXISTS research_iterations (
     strategy_provider TEXT,
     strategy_model TEXT,
     focus_obligation_id INTEGER,
+    progress_class TEXT,
+    progress_level TEXT,
+    progress_events_json TEXT,
+    resolution_progress INTEGER CHECK (resolution_progress IN (0,1)),
+    open_obligations_before INTEGER CHECK (open_obligations_before >= 0),
+    open_obligations_after INTEGER CHECK (open_obligations_after >= 0),
+    resolved_obligation_count INTEGER CHECK (resolved_obligation_count >= 0),
+    new_obligation_count INTEGER CHECK (new_obligation_count >= 0),
+    candidate_created_count INTEGER CHECK (candidate_created_count >= 0),
+    candidate_tested_count INTEGER CHECK (candidate_tested_count >= 0),
+    closed_branch_count INTEGER CHECK (closed_branch_count >= 0),
+    accepted_artifact_count INTEGER CHECK (accepted_artifact_count >= 0),
     duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
     attack_outcome TEXT NOT NULL DEFAULT 'not_applicable'
         CHECK (attack_outcome IN (
@@ -883,6 +910,9 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     if version < 9:
         for name, sql_type in RESEARCH_SELECTION_COLUMNS.items():
             _add_column(con, "research_iterations", f"{name} {sql_type}")
+    if version < 10:
+        for name, sql_type in RESEARCH_PROGRESS_COLUMNS.items():
+            _add_column(con, "research_iterations", f"{name} {sql_type}")
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -903,6 +933,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 7, "research_iteration_synthesis_inputs")
     _record_migration(con, 8, "normalized_call_telemetry")
     _record_migration(con, 9, "research_strategy_selection")
+    _record_migration(con, 10, "research_progress_metrics")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -940,6 +971,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 7, "research_iteration_synthesis_inputs")
         _record_migration(con, 8, "normalized_call_telemetry")
         _record_migration(con, 9, "research_strategy_selection")
+        _record_migration(con, 10, "research_progress_metrics")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

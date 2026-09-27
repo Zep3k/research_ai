@@ -446,7 +446,7 @@ def test_v8_migration_retains_null_strategy_metadata_and_is_idempotent(monkeypat
         con.execute("PRAGMA user_version=8")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 9
+            assert con.execute("PRAGMA user_version").fetchone()[0] == 10
             assert con.execute("SELECT name FROM schema_migrations WHERE version=9").fetchone()[0] == "research_strategy_selection"
             row = con.execute("SELECT * FROM research_iterations").fetchone()
             assert con.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -548,7 +548,8 @@ def test_strategy_execution_duplicates_still_use_full_context(historical, monkey
     assert "Elsewhere in branch A" not in requests[1][1]["prompt"]
     with connect() as con:
         row = con.execute("SELECT duplicate_count,material_progress FROM research_iterations").fetchone()
-    assert tuple(row) == (1, 0)
+    # The duplicate is still rejected; the inconclusive attack itself is validation.
+    assert tuple(row) == (1, 1)
 
 
 def test_strategy_cost_is_spent_before_execution_budget_admission(historical, monkeypatch):
