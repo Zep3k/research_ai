@@ -14,5 +14,9 @@ class ModelOutputError(TheoryError):
     """A provider returned output that cannot be used safely."""
 
 
+class TelemetryError(TheoryError):
+    """Provider usage is inconsistent or cannot be priced accurately."""
+
+
 class TrustError(TheoryError):
     """A research write would violate an epistemic trust rule."""

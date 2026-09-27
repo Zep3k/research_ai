@@ -55,7 +55,8 @@ class FakeProvider:
     def complete(self, **kwargs):
         self.calls.append(kwargs)
         text = next(self.texts)
-        return ModelResult(text=text, input_tokens=100, output_tokens=50, cost_usd=0.0014)
+        return ModelResult(text=text, input_tokens=100, uncached_input_tokens=100,
+                           output_tokens=50, cost_usd=0.0014, output_cost_usd=0.0014)
 
 
 def workspace(monkeypatch, tmp_path, budget=100.0):

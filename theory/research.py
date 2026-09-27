@@ -22,7 +22,7 @@ from .graph import (
 from .jsonutil import parse_json_model
 from .model_calls import budget_guard, call_model
 from .providers import Provider, get_model_spec, get_provider
-from .research_context import ResearchContext, for_workstream
+from .research_context import ResearchContext, focus_research_context, for_workstream
 
 
 RESEARCH_MAX_OUTPUT_TOKENS = 12_000
@@ -1751,11 +1751,11 @@ def research(
     providers: dict[str, Provider] = {}
 
     while calls_made < max_calls:
-        context = for_workstream(workstream_id)
+        full_context = for_workstream(workstream_id)
         history = _history(workstream_id)
         if _all_branches_terminal(
-            context, workstream_id
-        ) and not _open_obligation_ids(context, workstream_id, int(primary["id"])):
+            full_context, workstream_id
+        ) and not _open_obligation_ids(full_context, workstream_id, int(primary["id"])):
             _finalize(
                 workstream_id=workstream_id,
                 iteration_id=last_iteration_id,
@@ -1771,9 +1771,17 @@ def research(
                 "all_branches_blocked_or_refuted",
                 "blocked",
             )
-        choice = choose_next_operation(context, workstream_id, primary, history)
+        choice = choose_next_operation(full_context, workstream_id, primary, history)
         route = choose_model_route(choice, cfg, provider_override=provider_name)
-        prompt = _research_prompt(context, primary, choice)
+        model_context = focus_research_context(
+            full_context,
+            workstream_id=workstream_id,
+            primary_entity_id=int(primary["id"]),
+            target_entity_id=choice.target_entity_id,
+            focus_obligation_id=choice.focus_obligation_id,
+            consumed_entity_ids=choice.consumed_entity_ids,
+        )
+        prompt = _research_prompt(model_context, primary, choice)
         estimated_max_cost = budget_guard(
             cfg,
             model=route.model,
@@ -1815,14 +1823,14 @@ def research(
             )
             calls_made += 1
             report = parse_json_model(result.text, ResearchStepReport)
-            _validate_step_report(report, context, choice)
+            _validate_step_report(report, model_context, choice)
             persisted = _persist_step(
                 iteration_id=iteration_id,
                 workstream_id=workstream_id,
                 provider_name=route.provider,
                 model=route.model,
                 choice=choice,
-                context=context,
+                context=full_context,
                 report=report,
             )
         except Exception as exc:
@@ -1834,7 +1842,7 @@ def research(
             current_run_consecutive_no_progress = 0
         else:
             current_run_consecutive_no_progress += 1
-        context_after = for_workstream(workstream_id)
+        full_context_after = for_workstream(workstream_id)
         if report.human_judgment_required:
             _finalize(
                 workstream_id=workstream_id,
@@ -1856,13 +1864,13 @@ def research(
             and report.attack_outcome == "no_critical_issue"
             and choice.focus_obligation_id is not None
             and _all_obligations_have_completed_candidates(
-                context_after,
+                full_context_after,
                 _history(workstream_id),
                 workstream_id,
                 int(primary["id"]),
             )
             and not _open_obligation_ids(
-                context_after, workstream_id, int(primary["id"])
+                full_context_after, workstream_id, int(primary["id"])
             )
         ):
             _finalize(
@@ -1885,9 +1893,9 @@ def research(
                 "completed",
             )
         if _all_branches_terminal(
-            context_after, workstream_id
+            full_context_after, workstream_id
         ) and not _open_obligation_ids(
-            context_after, workstream_id, int(primary["id"])
+            full_context_after, workstream_id, int(primary["id"])
         ):
             _finalize(
                 workstream_id=workstream_id,

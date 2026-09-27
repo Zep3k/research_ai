@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterable
@@ -64,6 +65,7 @@ class ResearchContext:
     workstream_links: tuple[dict[str, Any], ...] = ()
     selections: dict[str, tuple[int, ...]] = field(default_factory=dict)
     epistemic: dict[str, EpistemicGroup] = field(default_factory=_empty_epistemic)
+    context_scope: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,7 +90,96 @@ class ResearchContext:
             "epistemic_partitions": {
                 state: asdict(group) for state, group in self.epistemic.items()
             },
+            **({"context_scope": self.context_scope} if self.context_scope is not None else {}),
         }
+
+
+def focus_research_context(
+    full_context: ResearchContext,
+    *,
+    workstream_id: int,
+    primary_entity_id: int,
+    target_entity_id: int,
+    focus_obligation_id: int | None = None,
+    consumed_entity_ids: tuple[int, ...] = (),
+) -> ResearchContext:
+    """Pure, one-hop execution view; omitted entities have not been judged irrelevant."""
+    anchors = {target_entity_id, *consumed_entity_ids}
+    if focus_obligation_id is not None:
+        anchors.add(focus_obligation_id)
+    mandatory = anchors | {primary_entity_id} | {
+        int(link["entity_id"]) for link in full_context.workstream_links
+        if int(link["workstream_id"]) == workstream_id and link["role"] == "input"
+    }
+    available = {int(entity["id"]) for entity in full_context.entities}
+    missing = mandatory - available
+    if missing:
+        raise TheoryError(f"Mandatory research context entities are absent: {sorted(missing)}")
+
+    included = set(mandatory)
+    active_relations = tuple(
+        relation for relation in full_context.relations if relation["status"] == "active"
+    )
+    for relation in active_relations:
+        endpoints = {int(relation["source_entity_id"]), int(relation["target_entity_id"])}
+        if endpoints & anchors:
+            included.update(endpoints)
+
+    for entity_id, attrs in full_context.attributes.items():
+        references: set[int] = set()
+        for key in ("related_entity_ids", "addresses_obligation_ids", "research_related_obligation_ids"):
+            try:
+                values = json.loads(attrs.get(key, "[]"))
+            except (TypeError, ValueError):
+                continue
+            if isinstance(values, list):
+                references.update(value for value in values if type(value) is int and value > 0)
+        try:
+            references.add(int(attrs["research_focus_obligation_id"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+        if entity_id in anchors:
+            included.update(references)
+        if references & anchors:
+            included.add(entity_id)
+
+    included &= available
+    entities = tuple(entity for entity in full_context.entities if int(entity["id"]) in included)
+    relations = tuple(
+        relation for relation in active_relations
+        if int(relation["source_entity_id"]) in included
+        and int(relation["target_entity_id"]) in included
+    )
+    epistemic = {
+        state: EpistemicGroup(
+            label=label, model_instruction=instruction,
+            entities=tuple(entity for entity in entities if entity["trust_state"] == state),
+            relations=tuple(relation for relation in relations if relation["trust_state"] == state),
+        )
+        for state, (label, instruction) in EPISTEMIC_GUIDANCE.items()
+    }
+    return ResearchContext(
+        target_entity=next(entity for entity in entities if int(entity["id"]) == target_entity_id),
+        workstream=full_context.workstream,
+        entities=entities, relations=relations,
+        attributes={entity_id: attrs for entity_id, attrs in full_context.attributes.items()
+                    if entity_id in included},
+        sources=tuple(source for source in full_context.sources if int(source["entity_id"]) in included),
+        workstream_links=tuple(link for link in full_context.workstream_links if int(link["entity_id"]) in included),
+        selections={key: tuple(entity_id for entity_id in ids if entity_id in included)
+                    for key, ids in full_context.selections.items()},
+        epistemic=epistemic,
+        context_scope={
+            "mode": "focused_research_operation",
+            "primary_entity_id": primary_entity_id,
+            "target_entity_id": target_entity_id,
+            "focus_obligation_id": focus_obligation_id,
+            "consumed_entity_ids": list(consumed_entity_ids),
+            "included_entity_ids": [int(entity["id"]) for entity in entities],
+            "full_workstream_entity_count": len(full_context.entities),
+            "focused_entity_count": len(entities),
+        },
+    )
 
 
 def _rows_as_dicts(rows: Iterable[sqlite3.Row]) -> tuple[dict[str, Any], ...]:

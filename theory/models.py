@@ -69,8 +69,35 @@ class ResearchReport(StructuredModel):
 
 class ModelResult(StructuredModel):
     text: str
-    input_tokens: int = Field(default=0, ge=0)
-    output_tokens: int = Field(default=0, ge=0)
-    cost_usd: float = Field(default=0.0, ge=0)
+    input_tokens: int = Field(default=0, ge=0, strict=True)
+    uncached_input_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_read_input_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_write_input_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_write_5m_input_tokens: int = Field(default=0, ge=0, strict=True)
+    cache_write_1h_input_tokens: int = Field(default=0, ge=0, strict=True)
+    output_tokens: int = Field(default=0, ge=0, strict=True)
+    reasoning_tokens: int | None = Field(default=None, ge=0, strict=True)
+    uncached_input_cost_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    cache_read_cost_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    cache_write_cost_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    output_cost_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    cost_usd: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     response_status: str = "completed"
     incomplete_reason: str | None = None
+
+    @model_validator(mode="after")
+    def validate_accounting(self) -> "ModelResult":
+        if self.input_tokens != (
+            self.uncached_input_tokens + self.cache_read_input_tokens + self.cache_write_input_tokens
+        ):
+            raise ValueError("input_tokens must equal uncached + cache-read + cache-write")
+        if self.cache_write_input_tokens != (
+            self.cache_write_5m_input_tokens + self.cache_write_1h_input_tokens
+        ):
+            raise ValueError("cache-write tokens must equal the two accounting buckets")
+        if self.cost_usd != (
+            self.uncached_input_cost_usd + self.cache_read_cost_usd
+            + self.cache_write_cost_usd + self.output_cost_usd
+        ):
+            raise ValueError("cost_usd must equal the four cost components")
+        return self

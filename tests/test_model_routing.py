@@ -112,6 +112,8 @@ class PricedProvider(DynamicProvider):
     def complete(self, **kwargs):
         result = super().complete(**kwargs)
         result.cost_usd = estimate_cost(kwargs["model"], result.input_tokens, result.output_tokens)
+        result.uncached_input_cost_usd = estimate_cost(kwargs["model"], result.input_tokens, 0)
+        result.output_cost_usd = estimate_cost(kwargs["model"], 0, result.output_tokens)
         return result
 
 

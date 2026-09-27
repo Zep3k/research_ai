@@ -28,8 +28,10 @@ class FakeProvider:
         return ModelResult(
             text=self.response,
             input_tokens=400,
+            uncached_input_tokens=400,
             output_tokens=200,
             cost_usd=0.0056,
+            output_cost_usd=0.0056,
         )
 
 

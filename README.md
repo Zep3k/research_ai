@@ -333,7 +333,26 @@ and attack review records the actual provider/model, never `auto`.
 - `prove` only when an unproved precise non-`ProofAttempt` candidate is deterministically connected to that obligation;
 - `develop` the obligation itself when none of those focused operations is available, or develop the primary object when no obligation is open.
 
-The choice, target, and rationale are persisted in `research_iterations` before the operation call. The model must echo that choice; it cannot redirect the controller. Synthesis must echo and reference every required consumed entity. All prompts contain only `research_context.for_workstream(...)`, the deterministic decision, and no retrieval or chat history.
+The choice, target, and rationale are persisted in `research_iterations` before the operation call. The model must echo that choice; it cannot redirect the controller. Synthesis must echo and reference every required consumed entity.
+
+Research uses two contexts. The **full controller context**, loaded by
+`for_workstream()`, remains authoritative for operation/focus selection, stopping,
+duplicate detection, persistence, and candidate closure. The **focused execution
+context** is a pure transformation of that snapshot, used only for the prompt and
+validation of entity/source IDs returned by the model.
+
+`focus_research_context()` always keeps the primary, selected target, focus
+obligation, all consumed entities, and every workstream `input`. It adds one
+explicit provenance hop around target/focus/consumed anchors, using active graph
+relations and stored related/addressed/focus attributes. It does not recursively
+expand, rank prose, summarize, query the database, or impose a hard entity cap.
+Attributes, attached sources, links, selections, relations, and epistemic
+partitions are filtered to that view. Missing mandatory IDs fail clearly.
+`context_scope` records the selected IDs and full/focused counts. Omission means
+only that this bounded execution policy did not select the entity; it is not a
+scientific relevance judgment. Prompts contain only the supplied focused graph
+and controller decision, with no retrieval or chat history. References to omitted
+entity/source IDs are rejected even if they exist in the full graph.
 
 Each strict response contains typed artifacts, a stable `material_key`, in-context entity/source references, provisional epistemic status, addressed-obligation candidates, attack outcome, unresolved points, and any request for human judgment. New objects and generated `ATTEMPTS` relations pass through the write gate as `quarantined` and attach to the workstream. `ATTEMPTS` means that a candidate argument was recorded; it does not resolve the obligation. Each attacked candidate stores its own `research_attack_state` (`challenged`, `inconclusive`, or `survived_attack`), while the separate obligation lifecycle uses `open`, `candidate_pending_attack`, `challenged`, `resolved_candidate`, and `blocked`. No state means mathematically verified.
 
@@ -356,7 +375,7 @@ Success or call-limit completion sets lifecycle `completed`; no live branch, sta
 
 ## V0.1 compatibility and migration
 
-The first open of an older database migrates it in place to schema version 6. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 8. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -371,6 +390,10 @@ Migration behavior is explicit:
 9. Existing sourced entities/relations backed only by incomplete locators are conservatively downgraded to `unverified`.
 10. Schema version 5 broadens only the workstream-type constraint to add `develop`; existing workstream rows, links, and model-call references retain their IDs and values.
 11. Schema version 6 adds the `research` workstream type and durable `research_iterations`; existing workstream IDs, links, reviews, and model-call references are preserved.
+12. Schema version 7 records exact synthesis input sets on research iterations.
+13. Schema version 8 adds nullable detailed usage, cost, and prompt-byte columns to
+    `api_calls`. Historical receipts retain their original totals; unknown details
+    remain NULL and are never backfilled with assumed cache usage.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 
@@ -379,6 +402,30 @@ Migration does not reinterpret old investigation JSON as sourced graph knowledge
 OpenAI and Anthropic adapters remain behind the same provider-independent interface. Every attempted paid call is entered in `api_calls` before execution and completed or failed with provider, model, purpose, token counts, estimated cost, timestamp, raw response when available, run ID, and optional workstream ID.
 
 Before a call, a conservative local bound is checked against the configured monthly budget. Unknown models are refused until pricing is added centrally in `theory/providers.py`. Pricing and model availability are external state and must be verified against official provider documentation before being changed.
+
+For new telemetry-aware calls, `input_tokens` means **total processed input**:
+`uncached_input_tokens + cache_read_input_tokens + cache_write_input_tokens`.
+OpenAI reports that total directly; uncached input is its total minus reported
+cache reads/writes. Anthropic reports uncached input separately, so its total adds
+cache creation and cache reads. Reasoning/thinking tokens are optional detail
+within billed output, never an additional output charge.
+
+Realized cost is the exact sum of uncached input, cache reads, cache writes, and
+output components, using provider-reported usage and registered per-million rates.
+Anthropic write costs distinguish 5-minute and 1-hour TTLs; a missing nonzero-write
+TTL breakdown or inconsistent usage fails closed. OpenAI writes use the normalized
+`cache_write_5m_input_tokens` bucket solely for accounting, without claiming those
+TTL semantics. `estimate_cost()` still means all input uncached. Admission still
+assumes uncached prompt input plus maximum billed output; anticipated cache hits
+never relax the budget guard.
+
+Receipts retain detailed usage even on provider-incomplete responses. Calls that
+fail before usage is available leave detailed usage/cost fields NULL (legacy
+aggregate columns retain their existing zero defaults). `prompt_utf8_bytes` records
+the exact UTF-8 length of the submitted prompt. `workstream show` displays the
+decomposition and optional reasoning count only when captured; old rows keep the
+compact display. `monthly_spend()` continues summing authoritative `cost_usd`.
+Explicit Anthropic `cache_control` is **not enabled** by this patch.
 
 The retained `investigate` workflow still operates on legacy ideas and OpenAlex discovery metadata. It is compatibility functionality, not the graph-backed attack architecture, and its JSON report is not automatically promoted into the research graph.
 

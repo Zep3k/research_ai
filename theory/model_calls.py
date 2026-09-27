@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from .config import Config
-from .db import connect, monthly_spend, utcnow
+from .db import CALL_TELEMETRY_COLUMNS, connect, monthly_spend, utcnow
 from .errors import BudgetExceededError, ModelOutputError, TheoryError
 from .models import ModelResult
 from .providers import conservative_call_cost
@@ -34,14 +34,15 @@ def _start_call(
     model: str,
     purpose: str,
     estimated_max_cost_usd: float,
+    prompt_utf8_bytes: int,
 ) -> int:
     with connect() as con:
         cur = con.execute(
             """
             INSERT INTO api_calls(
                 run_id,workstream_id,provider,model,purpose,input_tokens,output_tokens,cost_usd,
-                estimated_max_cost_usd,status,error_message,response_text,created_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                estimated_max_cost_usd,status,error_message,response_text,created_at,prompt_utf8_bytes
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_id,
@@ -57,6 +58,7 @@ def _start_call(
                 None,
                 None,
                 utcnow(),
+                prompt_utf8_bytes,
             ),
         )
         return int(cur.lastrowid)
@@ -66,10 +68,13 @@ def _finish_call(
     call_id: int, *, result: ModelResult | None, error: Exception | None = None
 ) -> None:
     with connect() as con:
+        detail_keys = tuple(key for key in CALL_TELEMETRY_COLUMNS if key != "prompt_utf8_bytes")
+        details = tuple(getattr(result, key) if result else None for key in detail_keys)
         con.execute(
-            """
+            f"""
             UPDATE api_calls
-            SET input_tokens=?,output_tokens=?,cost_usd=?,status=?,error_message=?,response_text=?
+            SET input_tokens=?,output_tokens=?,cost_usd=?,status=?,error_message=?,response_text=?,
+                {','.join(f'{key}=?' for key in detail_keys)}
             WHERE id=?
             """,
             (
@@ -79,6 +84,7 @@ def _finish_call(
                 "failed" if error else "completed",
                 str(error)[:2000] if error else None,
                 result.text if result else None,
+                *details,
                 call_id,
             ),
         )
@@ -105,6 +111,7 @@ def call_model(
         model=model,
         purpose=purpose,
         estimated_max_cost_usd=estimated_max_cost_usd,
+        prompt_utf8_bytes=len(prompt.encode("utf-8")),
     )
     try:
         result = provider.complete(

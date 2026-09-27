@@ -94,8 +94,10 @@ class DynamicProvider:
         return ModelResult(
             text=json.dumps(response),
             input_tokens=500,
+            uncached_input_tokens=500,
             output_tokens=250,
             cost_usd=0.007,
+            output_cost_usd=0.007,
         )
 
 
@@ -2427,8 +2429,10 @@ def test_incomplete_openai_response_is_not_parsed_and_retains_usage(
             return ModelResult(
                 text='{"operation": "develop", "summary": "cut off',
                 input_tokens=1_234,
+                uncached_input_tokens=1_234,
                 output_tokens=31_999,
                 cost_usd=0.644916,
+                output_cost_usd=0.644916,
                 response_status="incomplete",
                 incomplete_reason="max_output_tokens",
             )

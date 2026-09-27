@@ -8,7 +8,21 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
+
+CALL_TELEMETRY_COLUMNS = {
+    "uncached_input_tokens": "INTEGER",
+    "cache_read_input_tokens": "INTEGER",
+    "cache_write_input_tokens": "INTEGER",
+    "cache_write_5m_input_tokens": "INTEGER",
+    "cache_write_1h_input_tokens": "INTEGER",
+    "reasoning_tokens": "INTEGER",
+    "uncached_input_cost_usd": "REAL",
+    "cache_read_cost_usd": "REAL",
+    "cache_write_cost_usd": "REAL",
+    "output_cost_usd": "REAL",
+    "prompt_utf8_bytes": "INTEGER",
+}
 
 # V0.1 tables remain available while the old investigate workflow is retired
 # gradually. New research state belongs in the typed graph tables below.
@@ -112,6 +126,17 @@ CREATE TABLE IF NOT EXISTS api_calls (
     status TEXT NOT NULL DEFAULT 'completed',
     error_message TEXT,
     response_text TEXT,
+    uncached_input_tokens INTEGER CHECK (uncached_input_tokens >= 0),
+    cache_read_input_tokens INTEGER CHECK (cache_read_input_tokens >= 0),
+    cache_write_input_tokens INTEGER CHECK (cache_write_input_tokens >= 0),
+    cache_write_5m_input_tokens INTEGER CHECK (cache_write_5m_input_tokens >= 0),
+    cache_write_1h_input_tokens INTEGER CHECK (cache_write_1h_input_tokens >= 0),
+    reasoning_tokens INTEGER CHECK (reasoning_tokens >= 0),
+    uncached_input_cost_usd REAL CHECK (uncached_input_cost_usd >= 0),
+    cache_read_cost_usd REAL CHECK (cache_read_cost_usd >= 0),
+    cache_write_cost_usd REAL CHECK (cache_write_cost_usd >= 0),
+    output_cost_usd REAL CHECK (output_cost_usd >= 0),
+    prompt_utf8_bytes INTEGER CHECK (prompt_utf8_bytes >= 0),
     created_at TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE RESTRICT,
     FOREIGN KEY(workstream_id) REFERENCES workstreams(id) ON DELETE RESTRICT
@@ -835,6 +860,9 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
             "research_iterations",
             "consumed_entity_ids_json TEXT NOT NULL DEFAULT '[]'",
         )
+    if version < 8:
+        for name, sql_type in CALL_TELEMETRY_COLUMNS.items():
+            _add_column(con, "api_calls", f"{name} {sql_type} CHECK ({name} >= 0)")
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -853,6 +881,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 5, "develop_workstream_type")
     _record_migration(con, 6, "bounded_research_controller")
     _record_migration(con, 7, "research_iteration_synthesis_inputs")
+    _record_migration(con, 8, "normalized_call_telemetry")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -888,6 +917,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 5, "develop_workstream_type")
         _record_migration(con, 6, "bounded_research_controller")
         _record_migration(con, 7, "research_iteration_synthesis_inputs")
+        _record_migration(con, 8, "normalized_call_telemetry")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

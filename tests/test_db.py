@@ -200,7 +200,7 @@ def test_current_v01_state_is_backfilled_once_into_graph(monkeypatch, tmp_path):
     ]
     assert "workstream_id" in api_columns
     assert "consumed_entity_ids_json" in iteration_columns
-    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5, 6, 7]
+    assert [row[0] for row in migrations] == [1, 2, 3, 4, 5, 6, 7, 8]
     assert count == 2
 
 

@@ -629,7 +629,7 @@ def workstream_show(workstream_id: int):
         ).fetchall()
         calls = con.execute(
             """
-            SELECT provider,model,purpose,status,cost_usd,estimated_max_cost_usd,error_message
+            SELECT *
             FROM api_calls WHERE workstream_id=? ORDER BY id
             """,
             (workstream_id,),
@@ -670,6 +670,17 @@ def workstream_show(workstream_id: int):
             f"{call['status']} | estimated cost ${float(call['cost_usd']):.4f} "
             f"(admission cap ${float(call['estimated_max_cost_usd']):.4f})"
         )
+        if call["uncached_input_tokens"] is not None:
+            console.print(
+                f"    input {call['input_tokens']:,} = {call['uncached_input_tokens']:,} uncached"
+                f" + {call['cache_read_input_tokens']:,} cache-read"
+                f" + {call['cache_write_input_tokens']:,} cache-write"
+            )
+            reasoning = (f" (reasoning {call['reasoning_tokens']:,})"
+                         if call["reasoning_tokens"] is not None else "")
+            console.print(f"    output {call['output_tokens']:,}{reasoning}")
+        if call["prompt_utf8_bytes"] is not None:
+            console.print(f"    prompt: {call['prompt_utf8_bytes']:,} bytes")
         if call["error_message"]:
             console.print(f"    error: {escape(call['error_message'])}")
 
