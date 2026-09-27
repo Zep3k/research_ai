@@ -8,7 +8,17 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
+
+RESEARCH_SELECTION_COLUMNS = {
+    "selection_mode": "TEXT",
+    "legal_move_ids_json": "TEXT",
+    "selected_move_id": "TEXT",
+    "selection_rationale": "TEXT",
+    "strategy_provider": "TEXT",
+    "strategy_model": "TEXT",
+    "focus_obligation_id": "INTEGER",
+}
 
 CALL_TELEMETRY_COLUMNS = {
     "uncached_input_tokens": "INTEGER",
@@ -274,6 +284,13 @@ CREATE TABLE IF NOT EXISTS research_iterations (
         CHECK (material_progress IN (0, 1)),
     artifact_ids_json TEXT NOT NULL DEFAULT '[]',
     consumed_entity_ids_json TEXT NOT NULL DEFAULT '[]',
+    selection_mode TEXT,
+    legal_move_ids_json TEXT,
+    selected_move_id TEXT,
+    selection_rationale TEXT,
+    strategy_provider TEXT,
+    strategy_model TEXT,
+    focus_obligation_id INTEGER,
     duplicate_count INTEGER NOT NULL DEFAULT 0 CHECK (duplicate_count >= 0),
     attack_outcome TEXT NOT NULL DEFAULT 'not_applicable'
         CHECK (attack_outcome IN (
@@ -863,6 +880,9 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     if version < 8:
         for name, sql_type in CALL_TELEMETRY_COLUMNS.items():
             _add_column(con, "api_calls", f"{name} {sql_type} CHECK ({name} >= 0)")
+    if version < 9:
+        for name, sql_type in RESEARCH_SELECTION_COLUMNS.items():
+            _add_column(con, "research_iterations", f"{name} {sql_type}")
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -882,6 +902,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 6, "bounded_research_controller")
     _record_migration(con, 7, "research_iteration_synthesis_inputs")
     _record_migration(con, 8, "normalized_call_telemetry")
+    _record_migration(con, 9, "research_strategy_selection")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -918,6 +939,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 6, "bounded_research_controller")
         _record_migration(con, 7, "research_iteration_synthesis_inputs")
         _record_migration(con, 8, "normalized_call_telemetry")
+        _record_migration(con, 9, "research_strategy_selection")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

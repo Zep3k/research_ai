@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel
 
@@ -103,6 +103,7 @@ def call_model(
     estimated_max_cost_usd: float,
     response_model: type[BaseModel] | None = None,
     effort: str = "high",
+    validate_response: Callable[[str], None] | None = None,
 ) -> ModelResult:
     call_id = _start_call(
         run_id=run_id,
@@ -143,5 +144,11 @@ def call_model(
             )
         _finish_call(call_id, result=result, error=error)
         raise error
+    if validate_response is not None:
+        try:
+            validate_response(result.text)
+        except Exception as exc:
+            _finish_call(call_id, result=result, error=exc)
+            raise
     _finish_call(call_id, result=result)
     return result

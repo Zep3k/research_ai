@@ -164,7 +164,7 @@ def test_research_rejects_reference_to_omitted_entity_at_execution_boundary(bran
     provider = DynamicProvider(respond)
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
     with pytest.raises(ModelOutputError, match="unknown/out-of-context"):
-        research(workstream, max_calls=1)
+        research(workstream, max_calls=1, strategy="off")
     assert len(provider.calls) == 1
 
 
@@ -201,7 +201,7 @@ def test_attack_closure_receives_full_context_and_other_obligations_stay_open(br
     monkeypatch.setattr(controller, "_candidate_can_complete_obligation_after_attack", check)
     provider = DynamicProvider(lambda decision, _: step_report(decision, [], attack_outcome="no_critical_issue"))
     monkeypatch.setattr(controller, "get_provider", lambda _: provider)
-    outcome = research(workstream, max_calls=1)
+    outcome = research(workstream, max_calls=1, strategy="off")
     assert checked == [ids["proof_a"]]
     assert "UNRELATED_BRANCH_SENTINEL" not in provider.calls[0]["prompt"]
     # A has an unresolved blocker; its candidate must not close it. B also stays open.

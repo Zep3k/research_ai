@@ -208,24 +208,35 @@ def develop_command(
 def research_command(
     workstream_id: int,
     provider: str = typer.Option("auto", help="auto, openai, or anthropic"),
+    strategy: str = typer.Option(
+        "auto", help="auto or off; explicit providers always disable the strategist."
+    ),
     max_calls: int = typer.Option(
         4,
         "--max-calls",
         min=1,
         max=MAX_CONTROLLER_CALLS,
-        help="Maximum model calls for this bounded controller run.",
+        help="Maximum execution calls; auto strategy can add at most one call per execution.",
     ),
 ):
     """Run the bounded adaptive controller for an active research workstream."""
     require_workspace()
     if provider not in {"auto", "openai", "anthropic"}:
         raise typer.BadParameter("provider must be auto, openai, or anthropic")
+    if strategy not in {"auto", "off"}:
+        raise typer.BadParameter("strategy must be auto or off")
     outcome = run_research(
-        workstream_id, provider, max_calls=max_calls
+        workstream_id, provider, max_calls=max_calls, strategy=strategy
+    )
+    strategy_display = (
+        f"{outcome.strategy_calls_made} strategist call(s), "
+        f"{outcome.total_api_calls_made} total API call(s), "
+        if outcome.strategy_calls_made else ""
     )
     console.print(
         f"[green]Research controller stopped[/green]: {escape(outcome.stop_reason)}; "
-        f"{outcome.calls_made} model call(s), {len(outcome.artifact_ids)} artifact(s), "
+        f"{outcome.calls_made} execution call(s), {strategy_display}"
+        f"{len(outcome.artifact_ids)} artifact(s), "
         f"status {escape(outcome.final_status)}."
     )
     workstream_show(workstream_id)
@@ -619,7 +630,8 @@ def workstream_show(workstream_id: int):
         iterations = con.execute(
             """
             SELECT iteration_number,operation,target_entity_id,rationale,status,
-                   material_progress,duplicate_count,attack_outcome,stop_reason,error_message
+                   material_progress,duplicate_count,attack_outcome,stop_reason,error_message,
+                   selection_mode,legal_move_ids_json,selected_move_id,selection_rationale
             FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number
             """,
             (workstream_id,),
@@ -658,6 +670,13 @@ def workstream_show(workstream_id: int):
             f"duplicates {iteration['duplicate_count']}"
         )
         console.print(f"    why: {escape(iteration['rationale'])}")
+        if iteration["selection_mode"]:
+            console.print(
+                f"    selection: {escape(iteration['selection_mode'])} | "
+                f"{escape(iteration['selected_move_id'])}"
+            )
+            console.print(f"    legal moves: {escape(iteration['legal_move_ids_json'])}")
+            console.print(f"    selection reason: {escape(iteration['selection_rationale'])}")
         if iteration["attack_outcome"] != "not_applicable":
             console.print(f"    attack outcome: {iteration['attack_outcome']}")
         if iteration["stop_reason"]:

@@ -285,7 +285,26 @@ theory research 3 --max-calls 4
 theory workstream show 3
 ```
 
-Research defaults to `--provider auto`. After choosing the operation, the pure
+Research defaults to `--provider auto --strategy auto`. Its selection path is:
+
+```text
+deterministic controller state (full graph context)
+        ↓
+legal move frontier
+        ↓
+conditional low-cost strategist
+        ↓
+focused execution context
+        ↓
+operation-aware model router → one execution call
+```
+
+The **strategist** chooses among controller-generated legal research moves. The
+**router** chooses the execution model. The **executor** performs one bounded
+operation and produces scientific artifacts. Strategy never selects providers,
+changes operation parameters, or supplies scientific evidence.
+
+After choosing the operation, the pure
 `choose_model_route()` function applies this explicit cost baseline:
 
 | Operation | Model | Effort |
@@ -300,8 +319,9 @@ Sonnet provides the independent normal critic, and Opus handles the independent
 critic whose focused attack can contribute to candidate closure. This is an
 experimental baseline, not a claim that these models are intrinsically optimal.
 Receipts make its cost and research outcomes available for empirical comparison.
-Routing makes zero API calls. Providers are initialized lazily, and each iteration
-executes exactly one request with automatic SDK retries disabled.
+Routing makes zero API calls. Providers are initialized lazily and reused across
+strategy and execution. Each iteration executes exactly one execution request,
+with automatic SDK retries disabled.
 
 The research output cap is **12,000 tokens**, used for both budget admission and
 the provider request. Reports should be concise; the cap is an execution budget,
@@ -322,18 +342,71 @@ automatic routing and reserved for explicit provider-override evaluations.
 
 For controlled single-provider ablations, use `--provider openai` or
 `--provider anthropic`. These force `openai_model` or `anthropic_model` for every
-iteration at high effort. New configs default those fields to `gpt-6-sol` and
+iteration at high effort and **disable the strategist**, even with `--strategy auto`.
+They retain deterministic operation selection, keeping provider-only experiments
+free of a hidden OpenAI planning call. New configs default those fields to `gpt-6-sol` and
 `claude-opus-5-5`; existing configured values are retained. Each `api_calls` receipt
 and attack review records the actual provider/model, never `auto`.
 
-`--max-calls` is limited to 1–20. Every completed iteration makes exactly one provider call. A deterministic controller—not another model call—chooses the next operation from current linked graph state:
+`--max-calls` is limited to 1–20 and still bounds **execution calls**, not total API
+requests. An iteration has zero or one strategy call followed by exactly one
+execution call. A completed run has strategy calls ≤ execution calls ≤ `max_calls`
+and total calls ≤ `2 * max_calls`. The CLI reports both counts when strategy is
+used; `ResearchOutcome.calls_made` retains its execution-only meaning, alongside
+`strategy_calls_made` and the derived `total_api_calls_made`.
+
+Legal moves are generated without models or scoring. Each eligible open leaf
+obligation contributes exactly one frontier move using the existing local precedence:
 
 - `attack` first when the focused obligation has a relevant proof attempt that has not yet received one bounded attack;
 - `synthesize` when that obligation has a genuinely new set of at least two directly relevant graph artifacts;
 - `prove` only when an unproved precise non-`ProofAttempt` candidate is deterministically connected to that obligation;
 - `develop` the obligation itself when none of those focused operations is available, or develop the primary object when no obligation is open.
 
-The choice, target, and rationale are persisted in `research_iterations` before the operation call. The model must echo that choice; it cannot redirect the controller. Synthesis must echo and reference every required consumed entity.
+Parents with open children do not compete independently; multiple proof attempts
+on one obligation contribute only the newest unattacked candidate. Exact completed
+synthesis input sets are not repeated. Without open obligations, the baseline
+remains the sole move except when several concrete unattacked proof attempts exist.
+Move IDs encode operation, target, focus and ordered synthesis inputs, for example
+`attack:14:11:none` or `synthesize:10:10:6,12`. Ordering and IDs are deterministic.
+
+With exactly one legal move, `--strategy auto` selects it for free. With multiple
+moves, it makes one OpenAI `gpt-6-luna` call at **medium** effort, capped at **1,500
+output tokens**. `research_strategist_model` defaults to `gpt-6-luna` in old configs
+without rewriting them; this milestone permits only that trusted registry model
+for strategy, excluding Sol, Astra and Anthropic models. A compact, deterministic
+`ResearchState` contains stored entity titles and lifecycle/trust/branch states,
+open obligations and their candidate IDs, exact legal moves, the last six
+completed/error iterations, and controller counts. It omits graph bodies and
+uses no generated summaries, retrieval, numerical ranking, or new progress metric.
+
+The prompt asks for the most informative next move toward the primary goal,
+considering falsifiable candidates, uncertainty, obligation closure and recent
+progress without mechanically preferring attacks. The strict response contains
+only `selected_move_id` and `rationale`; an exact membership check resolves the
+ID to an authoritative operation. Strategy is planning metadata, never graph
+evidence, trust promotion or proof verification.
+
+Use `--strategy off` to select exactly the existing `choose_next_operation()`
+baseline with zero strategy calls. That baseline remains a required member of the
+legal set. A disagreement is an internal controller error, not a repaired or
+silently substituted move. In particular, the legacy scheduler can select a
+terminal precise candidate; legal-move validation now fails closed in that case
+while preserving the scheduler itself as a regression reference.
+
+Strategy calls pass through the ordinary budget guard and `call_model()` ledger
+with purpose `research:strategy`, including token/cache/cost/prompt-byte telemetry.
+Invalid structured output or an unoffered ID records a failed paid receipt with
+available usage and puts the workstream in `error`; no execution iteration or
+artifact is created. There is no retry or automatic fallback. A failed planning
+attempt can therefore have a receipt without a corresponding execution call.
+
+After valid selection, the choice, target, focus, legal move IDs, selection mode
+(`single_legal_move`, `strategist`, or `deterministic_baseline`), selected move ID,
+selection rationale, and optional strategy provider/model are persisted in
+`research_iterations` before the execution call. The execution model must echo
+that choice; it cannot redirect the controller. Synthesis must echo and reference
+every required consumed entity.
 
 Research uses two contexts. The **full controller context**, loaded by
 `for_workstream()`, remains authoritative for operation/focus selection, stopping,
@@ -371,11 +444,11 @@ The controller stops when:
 - the call limit is reached; or
 - the local budget guard refuses the next call.
 
-Success or call-limit completion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Budget refusal happens before an iteration or API-call record is created and leaves the workstream active. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
+Success or call-limit completion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Each budget refusal happens before the refused request or its execution iteration is recorded and leaves the workstream active. Any earlier paid strategy receipt is retained. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
 
 ## V0.1 compatibility and migration
 
-The first open of an older database migrates it in place to schema version 8. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 9. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -394,6 +467,10 @@ Migration behavior is explicit:
 13. Schema version 8 adds nullable detailed usage, cost, and prompt-byte columns to
     `api_calls`. Historical receipts retain their original totals; unknown details
     remain NULL and are never backfilled with assumed cache usage.
+14. Schema version 9 adds nullable `selection_mode`, `legal_move_ids_json`,
+    `selected_move_id`, `selection_rationale`, `strategy_provider`, `strategy_model`,
+    and `focus_obligation_id` to `research_iterations`. Legacy decisions retain
+    NULL for unknown metadata; no historical selection is fabricated or rewritten.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 
