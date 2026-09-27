@@ -207,7 +207,7 @@ def develop_command(
 @app.command("research")
 def research_command(
     workstream_id: int,
-    provider: str = typer.Option("openai", help="openai or anthropic"),
+    provider: str = typer.Option("auto", help="auto, openai, or anthropic"),
     max_calls: int = typer.Option(
         4,
         "--max-calls",
@@ -218,8 +218,8 @@ def research_command(
 ):
     """Run the bounded adaptive controller for an active research workstream."""
     require_workspace()
-    if provider not in {"openai", "anthropic"}:
-        raise typer.BadParameter("provider must be openai or anthropic")
+    if provider not in {"auto", "openai", "anthropic"}:
+        raise typer.BadParameter("provider must be auto, openai, or anthropic")
     outcome = run_research(
         workstream_id, provider, max_calls=max_calls
     )

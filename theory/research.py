@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from .config import Config
 from .db import connect, utcnow
-from .errors import ModelOutputError, TheoryError
+from .errors import ConfigurationError, ModelOutputError, TheoryError
 from .graph import (
     add_entity,
     add_relation,
@@ -21,11 +21,11 @@ from .graph import (
 )
 from .jsonutil import parse_json_model
 from .model_calls import budget_guard, call_model
-from .providers import get_model_spec, get_provider
+from .providers import Provider, get_model_spec, get_provider
 from .research_context import ResearchContext, for_workstream
 
 
-RESEARCH_MAX_OUTPUT_TOKENS = 32_000
+RESEARCH_MAX_OUTPUT_TOKENS = 12_000
 MAX_CONTROLLER_CALLS = 20
 OPERATIONS = ("develop", "attack", "synthesize", "prove")
 ROOT_TARGET_TYPES = {
@@ -248,6 +248,50 @@ class OperationChoice:
     consumed_entity_ids: tuple[int, ...] = ()
     open_obligation_ids: tuple[int, ...] = ()
     focus_obligation_id: int | None = None
+
+
+@dataclass(frozen=True)
+class ModelRoute:
+    provider: str
+    model: str
+    effort: str
+    max_output_tokens: int
+    rationale: str
+
+
+def choose_model_route(
+    choice: OperationChoice,
+    cfg: Config,
+    *,
+    provider_override: str = "auto",
+) -> ModelRoute:
+    """Pure operation-aware baseline: no API calls, availability probes, or fallback."""
+    if provider_override not in {"auto", "openai", "anthropic"}:
+        raise ConfigurationError(f"Unknown provider override: {provider_override}")
+    if choice.operation not in OPERATIONS:
+        raise ConfigurationError(f"Unknown research operation: {choice.operation}")
+    if provider_override != "auto":
+        model = getattr(cfg, f"{provider_override}_model")
+        spec = get_model_spec(model, provider_override)
+        return ModelRoute(
+            spec.provider, model, "high", RESEARCH_MAX_OUTPUT_TOKENS,
+            f"forced:{provider_override}",
+        )
+
+    role = choice.operation
+    if role == "attack" and choice.focus_obligation_id is not None:
+        role = "critical_attack"
+    model = getattr(cfg, f"research_{role}_model")
+    spec = get_model_spec(model)
+    if model in {"gpt-6-astra", "claude-fable-5-1"}:
+        raise ConfigurationError(
+            f"Model {model!r} is reserved for explicit provider-override experiments; "
+            "it cannot be used in automatic research routing."
+        )
+    return ModelRoute(
+        spec.provider, model, "medium" if role == "critical_attack" else "high",
+        RESEARCH_MAX_OUTPUT_TOKENS, f"auto:{role}",
+    )
 
 
 @dataclass(frozen=True)
@@ -668,6 +712,124 @@ def _relevant_unattacked_proof_attempts(
     return tuple(candidates)
 
 
+def _explicit_obligation_id(raw: object, obligation_ids: set[int]) -> int | None:
+    try:
+        entity_id = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return entity_id if entity_id in obligation_ids else None
+
+
+def _iteration_focus_obligation_id(
+    context: ResearchContext,
+    row: dict,
+    obligation_ids: set[int],
+) -> int | None:
+    """Recover one completed iteration's focus from explicit, auditable provenance."""
+    if row.get("status") != "completed":
+        return None
+
+    stored_focus = _explicit_obligation_id(
+        row.get("focus_obligation_id"), obligation_ids
+    )
+    if stored_focus is not None:
+        return stored_focus
+
+    target_id = _explicit_obligation_id(row.get("target_entity_id"), obligation_ids)
+    if target_id is not None:
+        return target_id
+
+    artifact_focuses = {
+        focus_id
+        for artifact_id in _stored_id_set(row.get("artifact_ids_json"))
+        if (
+            focus_id := _explicit_obligation_id(
+                _attribute(context, artifact_id, "research_focus_obligation_id"),
+                obligation_ids,
+            )
+        )
+        is not None
+    }
+    if len(artifact_focuses) == 1:
+        return next(iter(artifact_focuses))
+
+    try:
+        raw_target_id = int(row["target_entity_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    candidate_focus = _explicit_obligation_id(
+        _attribute(context, raw_target_id, "research_focus_obligation_id"),
+        obligation_ids,
+    )
+    if candidate_focus is not None:
+        return candidate_focus
+
+    directly_connected = set(
+        _stored_id_set(_attribute(context, raw_target_id, "related_entity_ids"))
+    ) | set(
+        _stored_id_set(_attribute(context, raw_target_id, "addresses_obligation_ids"))
+    )
+    directly_connected.update(
+        int(relation["target_entity_id"])
+        for relation in context.relations
+        if relation["relation_type"] == "ATTEMPTS"
+        and int(relation["source_entity_id"]) == raw_target_id
+    )
+    connected_obligations = directly_connected & obligation_ids
+    if len(connected_obligations) == 1:
+        return next(iter(connected_obligations))
+    return None
+
+
+def _select_focus_obligation(
+    context: ResearchContext,
+    history: tuple[dict, ...],
+    open_obligation_ids: tuple[int, ...],
+) -> int:
+    """Select an open leaf obligation fairly using only persisted provenance."""
+    if not open_obligation_ids:
+        raise TheoryError("Cannot select a focus obligation when none are open.")
+
+    open_ids = set(open_obligation_ids)
+    parents_with_open_children: set[int] = set()
+    for child_id in open_obligation_ids:
+        attrs = context.attributes.get(child_id, {})
+        explicit_parents = set(_stored_id_set(attrs.get("related_entity_ids")))
+        focus_parent = _explicit_obligation_id(
+            attrs.get("research_focus_obligation_id"), open_ids
+        )
+        if focus_parent is not None:
+            explicit_parents.add(focus_parent)
+        parents_with_open_children.update(
+            parent_id
+            for parent_id in explicit_parents & open_ids
+            if parent_id != child_id
+        )
+
+    leaf_ids = sorted(open_ids - parents_with_open_children)
+    # Malformed cyclic provenance has no leaf. Keep scheduling deterministic and live
+    # without inventing a parent/child direction that is absent from the graph.
+    eligible_ids = leaf_ids or sorted(open_ids)
+
+    last_focused_at: dict[int, int] = {}
+    for position, row in enumerate(history):
+        focus_id = _iteration_focus_obligation_id(context, row, open_ids)
+        if focus_id in eligible_ids:
+            last_focused_at[focus_id] = position
+
+    never_focused = [
+        obligation_id
+        for obligation_id in eligible_ids
+        if obligation_id not in last_focused_at
+    ]
+    if never_focused:
+        return min(never_focused)
+    return min(
+        eligible_ids,
+        key=lambda obligation_id: (last_focused_at[obligation_id], obligation_id),
+    )
+
+
 def choose_next_operation(
     context: ResearchContext,
     workstream_id: int,
@@ -700,7 +862,7 @@ def choose_next_operation(
     ]
 
     if open_obligations:
-        obligation_id = open_obligations[0]
+        obligation_id = _select_focus_obligation(context, history, open_obligations)
         relevant_unattacked = _relevant_unattacked_proof_attempts(
             context, history, (obligation_id,)
         )
@@ -1558,7 +1720,7 @@ def _finalize(
 
 
 def research(
-    workstream_id: int, provider_name: str, *, max_calls: int
+    workstream_id: int, provider_name: str = "auto", *, max_calls: int
 ) -> ResearchOutcome:
     """Run a bounded, deterministic controller with one model call per iteration."""
     if not 1 <= max_calls <= MAX_CONTROLLER_CALLS:
@@ -1566,11 +1728,8 @@ def research(
             f"max_calls must be between 1 and {MAX_CONTROLLER_CALLS}."
         )
     cfg = Config.load()
-    models = {"openai": cfg.openai_model, "anthropic": cfg.anthropic_model}
-    if provider_name not in models:
-        raise TheoryError(f"Unknown provider: {provider_name}")
-    model = models[provider_name]
-    get_model_spec(model, provider_name)
+    if provider_name not in {"auto", "openai", "anthropic"}:
+        raise ConfigurationError(f"Unknown provider override: {provider_name}")
 
     initial_context = for_workstream(workstream_id)
     workstream = initial_context.workstream
@@ -1589,7 +1748,7 @@ def research(
     artifact_ids: list[int] = []
     last_iteration_id: int | None = None
     current_run_consecutive_no_progress = 0
-    provider = None
+    providers: dict[str, Provider] = {}
 
     while calls_made < max_calls:
         context = for_workstream(workstream_id)
@@ -1613,17 +1772,18 @@ def research(
                 "blocked",
             )
         choice = choose_next_operation(context, workstream_id, primary, history)
+        route = choose_model_route(choice, cfg, provider_override=provider_name)
         prompt = _research_prompt(context, primary, choice)
         estimated_max_cost = budget_guard(
             cfg,
-            model=model,
+            model=route.model,
             prompt=prompt,
-            max_output_tokens=RESEARCH_MAX_OUTPUT_TOKENS,
+            max_output_tokens=route.max_output_tokens,
             purpose=f"research:{choice.operation}",
         )
-        if provider is None:
+        if route.provider not in providers:
             try:
-                provider = get_provider(provider_name)
+                providers[route.provider] = get_provider(route.provider)
             except Exception as exc:
                 with connect() as con:
                     set_workstream_status(
@@ -1643,16 +1803,15 @@ def research(
             result = call_model(
                 run_id=None,
                 workstream_id=workstream_id,
-                provider=provider,
-                provider_name=provider_name,
-                model=model,
+                provider=providers[route.provider],
+                provider_name=route.provider,
+                model=route.model,
                 purpose=f"research:{choice.operation}",
                 prompt=prompt,
-                max_output_tokens=RESEARCH_MAX_OUTPUT_TOKENS,
+                max_output_tokens=route.max_output_tokens,
                 estimated_max_cost_usd=estimated_max_cost,
-                response_model=(
-                    ResearchStepReport if provider_name == "openai" else None
-                ),
+                response_model=ResearchStepReport,
+                effort=route.effort,
             )
             calls_made += 1
             report = parse_json_model(result.text, ResearchStepReport)
@@ -1660,8 +1819,8 @@ def research(
             persisted = _persist_step(
                 iteration_id=iteration_id,
                 workstream_id=workstream_id,
-                provider_name=provider_name,
-                model=model,
+                provider_name=route.provider,
+                model=route.model,
                 choice=choice,
                 context=context,
                 report=report,

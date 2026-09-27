@@ -281,9 +281,50 @@ The `research` controller is deliberately bounded, graph-scoped, and auditable. 
 ```bash
 theory workstream create research "Advance and stress-test the candidate"
 theory workstream link 3 2 input
-theory research 3 --provider openai --max-calls 4
+theory research 3 --max-calls 4
 theory workstream show 3
 ```
+
+Research defaults to `--provider auto`. After choosing the operation, the pure
+`choose_model_route()` function applies this explicit cost baseline:
+
+| Operation | Model | Effort |
+| --- | --- | --- |
+| `develop` | OpenAI `gpt-6-luna` | high |
+| `synthesize` / `prove` | OpenAI `gpt-6-sol` | high |
+| `attack` without a focus obligation | Anthropic `claude-sonnet-5` | high |
+| `attack` with a focus obligation | Anthropic `claude-opus-5-5` | medium |
+
+Luna is the cheap default worker, Sol handles strong constructive reasoning,
+Sonnet provides the independent normal critic, and Opus handles the independent
+critic whose focused attack can contribute to candidate closure. This is an
+experimental baseline, not a claim that these models are intrinsically optimal.
+Receipts make its cost and research outcomes available for empirical comparison.
+Routing makes zero API calls. Providers are initialized lazily, and each iteration
+executes exactly one request with automatic SDK retries disabled.
+
+The research output cap is **12,000 tokens**, used for both budget admission and
+the provider request. Reports should be concise; the cap is an execution budget,
+not a guarantee that every theoretical maximum-length valid report fits. Truncated
+or invalid output fails the iteration without a repair call or escalation.
+Both providers receive a schema derived from `ResearchStepReport`. Anthropic uses
+`output_config.format` with the SDK's schema conversion helper; the complete local
+Pydantic and scientific validations still run after recording usage. This requires
+`anthropic>=1.8.0` (upgrade dependencies with `pip install -e '.[dev]'`).
+
+Role models are configurable through `research_develop_model`,
+`research_synthesize_model`, `research_prove_model`, `research_attack_model`, and
+`research_critical_attack_model` in `.theory/config.json`. Missing fields in old
+configs receive the defaults above without rewriting the file. Provider ownership
+and uncached pricing come only from `MODEL_SPECS`; unpriced models fail before a
+call. GPT-6 Astra and Claude Fable 5.1 have registered prices but are rejected in
+automatic routing and reserved for explicit provider-override evaluations.
+
+For controlled single-provider ablations, use `--provider openai` or
+`--provider anthropic`. These force `openai_model` or `anthropic_model` for every
+iteration at high effort. New configs default those fields to `gpt-6-sol` and
+`claude-opus-5-5`; existing configured values are retained. Each `api_calls` receipt
+and attack review records the actual provider/model, never `auto`.
 
 `--max-calls` is limited to 1–20. Every completed iteration makes exactly one provider call. A deterministic controller—not another model call—chooses the next operation from current linked graph state:
 

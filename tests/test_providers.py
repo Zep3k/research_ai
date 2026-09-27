@@ -1,6 +1,8 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from theory.jsonutil import parse_json_model
 from theory.providers import AnthropicProvider, OpenAIProvider
 from theory.research import ResearchStepReport
@@ -10,8 +12,10 @@ class CaptureCreate:
     def __init__(self, result):
         self.result = result
         self.kwargs = None
+        self.calls = 0
 
     def create(self, **kwargs):
+        self.calls += 1
         self.kwargs = kwargs
         return self.result
 
@@ -144,10 +148,61 @@ def test_anthropic_adapter_passes_effort_and_hard_output_cap():
         prompt="question",
         effort="high",
         max_output_tokens=1234,
-        response_model=ResearchStepReport,
+        response_model=None,
     )
 
     assert create.kwargs["output_config"] == {"effort": "high"}
     assert create.kwargs["max_tokens"] == 1234
     assert "text" not in create.kwargs
     assert result.text == "answer"
+
+
+def test_anthropic_structured_report_preserves_effort_and_artifact_variants():
+    report = {
+        "operation": "attack", "target_entity_id": 1, "summary": "Bounded attack.",
+        "artifacts": [], "consumed_entity_ids": [], "addressed_obligation_ids": [],
+        "attack_outcome": "no_critical_issue", "could_not_determine": [],
+        "human_judgment_required": False, "human_judgment_reason": None,
+    }
+    capture = CaptureCreate(SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=json.dumps(report))],
+        usage=SimpleNamespace(input_tokens=100, output_tokens=200),
+    ))
+    provider = AnthropicProvider.__new__(AnthropicProvider)
+    provider.client = SimpleNamespace(messages=capture)
+
+    result = provider.complete(
+        model="claude-opus-5-5", prompt="question", effort="medium",
+        max_output_tokens=12_000, response_model=ResearchStepReport,
+    )
+
+    assert capture.calls == 1
+    assert capture.kwargs["output_config"]["effort"] == "medium"
+    assert capture.kwargs["max_tokens"] == 12_000
+    output_format = capture.kwargs["output_config"]["format"]
+    assert output_format["type"] == "json_schema"
+    schema = output_format["schema"]
+    assert schema["additionalProperties"] is False
+    assert "anyOf" in schema["properties"]["artifacts"]["items"]
+    for variant, tag in (
+        ("ObstructionResearchArtifact", "obstruction"),
+        ("FailedApproachResearchArtifact", "failed_approach"),
+    ):
+        assert schema["$defs"][variant]["properties"]["artifact_type"]["enum"] == [tag]
+        assert schema["$defs"][variant]["additionalProperties"] is False
+    assert parse_json_model(result.text, ResearchStepReport).attack_outcome == "no_critical_issue"
+    assert result.cost_usd == pytest.approx(0.0044)
+
+
+@pytest.mark.parametrize("provider_class,module,constructor,key", [
+    (OpenAIProvider, "openai", "OpenAI", "OPENAI_API_KEY"),
+    (AnthropicProvider, "anthropic", "Anthropic", "ANTHROPIC_API_KEY"),
+])
+def test_provider_clients_disable_automatic_retries(
+    monkeypatch, provider_class, module, constructor, key
+):
+    calls = []
+    monkeypatch.setenv(key, "offline-test-key")
+    monkeypatch.setattr(f"{module}.{constructor}", lambda **kwargs: calls.append(kwargs))
+    provider_class()
+    assert calls == [{"max_retries": 0}]

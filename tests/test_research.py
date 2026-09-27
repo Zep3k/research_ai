@@ -23,6 +23,7 @@ from theory.research import (
     _open_obligation_ids,
     _relevant_synthesis_inputs,
     _research_prompt,
+    _select_focus_obligation,
     _validate_step_report,
     choose_next_operation,
     research,
@@ -947,6 +948,147 @@ def test_explicit_open_question_is_an_open_proof_obligation(monkeypatch, tmp_pat
     assert _open_obligation_ids(context, workstream, target) == (obligation,)
 
 
+def test_lower_id_obligation_cannot_starve_later_open_obligation(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    lower_id = add_linked_research_entity(
+        workstream, "OpenQuestion", "First obligation", proof_obligation=True
+    )
+    later_id = add_linked_research_entity(
+        workstream, "OpenQuestion", "Later obligation", proof_obligation=True
+    )
+    history = [
+        completed_history("develop", lower_id),
+        completed_history("develop", lower_id),
+    ]
+
+    choice = current_choice(workstream, target, history)
+
+    assert choice.focus_obligation_id == later_id
+    assert choice.target_entity_id == later_id
+
+
+def test_never_focused_obligation_beats_repeatedly_focused_obligation(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    never_focused = add_linked_research_entity(
+        workstream, "OpenQuestion", "Neglected obligation", proof_obligation=True
+    )
+    repeatedly_focused = add_linked_research_entity(
+        workstream, "OpenQuestion", "Repeated obligation", proof_obligation=True
+    )
+    history = [
+        completed_history("develop", repeatedly_focused),
+        completed_history("synthesize", repeatedly_focused),
+    ]
+
+    choice = current_choice(workstream, target, history)
+
+    assert choice.focus_obligation_id == never_focused
+
+
+def test_parent_obligation_is_deferred_while_explicit_child_is_open(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    parent = add_linked_research_entity(
+        workstream, "OpenQuestion", "Parent obligation", proof_obligation=True
+    )
+    child = add_linked_research_entity(
+        workstream, "OpenQuestion", "Refined child obligation", proof_obligation=True
+    )
+    with connect() as con:
+        set_attribute(con, child, "research_focus_obligation_id", str(parent))
+
+    choice = current_choice(workstream, target)
+
+    assert choice.focus_obligation_id == child
+    assert choice.focus_obligation_id != parent
+
+
+def test_parent_obligation_becomes_eligible_after_related_child_is_inactive(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    parent = add_linked_research_entity(
+        workstream, "OpenQuestion", "Parent obligation", proof_obligation=True
+    )
+    child = add_linked_research_entity(
+        workstream,
+        "OpenQuestion",
+        "Child linked through related IDs",
+        related_entity_ids=(parent,),
+        proof_obligation=True,
+    )
+    with connect() as con:
+        set_attribute(con, child, "research_obligation_state", "blocked")
+
+    choice = current_choice(workstream, target)
+
+    assert choice.open_obligation_ids == (parent,)
+    assert choice.focus_obligation_id == parent
+
+
+def test_repeated_selection_eventually_focuses_every_open_leaf(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    obligations = tuple(
+        add_linked_research_entity(
+            workstream,
+            "OpenQuestion",
+            f"Leaf obligation {index}",
+            proof_obligation=True,
+        )
+        for index in range(3)
+    )
+    context = for_workstream(workstream)
+    history: list[dict] = []
+    selected: list[int] = []
+    for _ in range(6):
+        focus_id = _select_focus_obligation(context, tuple(history), obligations)
+        selected.append(focus_id)
+        history.append(completed_history("develop", focus_id))
+
+    assert selected == [*obligations, *obligations]
+
+
+def test_focus_obligation_selection_is_deterministic_and_excludes_inactive(
+    monkeypatch, tmp_path
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, target = make_research_workstream()
+    selectable = add_linked_research_entity(
+        workstream, "OpenQuestion", "Selectable obligation", proof_obligation=True
+    )
+    blocked = add_linked_research_entity(
+        workstream, "OpenQuestion", "Blocked obligation", proof_obligation=True
+    )
+    resolved = add_linked_research_entity(
+        workstream, "OpenQuestion", "Resolved candidate", proof_obligation=True
+    )
+    with connect() as con:
+        set_attribute(con, blocked, "research_obligation_state", "blocked")
+        set_attribute(con, resolved, "research_obligation_state", "resolved_candidate")
+    context = for_workstream(workstream)
+    open_ids = _open_obligation_ids(context, workstream, target)
+
+    first = _select_focus_obligation(context, (), open_ids)
+    second = _select_focus_obligation(context, (), open_ids)
+
+    assert open_ids == (selectable,)
+    assert first == second == selectable
+    assert blocked not in open_ids
+    assert resolved not in open_ids
+
+
 def test_legacy_candidate_survived_attack_state_remains_actionable(
     monkeypatch, tmp_path
 ):
@@ -1808,15 +1950,9 @@ def test_proving_candidate_creates_attempt_that_is_attacked_not_proved(
                         "candidate_a_reduction_attempt",
                         [lemma, obligation],
                         epistemic_status="inference",
-                    ),
-                    artifact(
-                        "proof_obligation",
-                        "Prove the remaining implication exposed by candidate A.",
-                        "candidate_a_remaining_implication",
-                        [lemma],
-                        epistemic_status="unresolved",
-                    ),
+                    )
                 ],
+                addressed=[obligation],
             )
         assert call_number == 2
         assert decision["operation"] == "attack"
@@ -2312,7 +2448,7 @@ def test_incomplete_openai_response_is_not_parsed_and_retains_usage(
         research(workstream, "openai", max_calls=1)
 
     assert len(provider.calls) == 1
-    assert provider.calls[0]["max_output_tokens"] == 32_000
+    assert provider.calls[0]["max_output_tokens"] == 12_000
     assert provider.calls[0]["response_model"] is ResearchStepReport
     with connect() as con:
         call = con.execute("SELECT * FROM api_calls").fetchone()
@@ -2363,7 +2499,7 @@ def test_anthropic_research_keeps_json_parsing_path(monkeypatch, tmp_path):
     outcome = research(workstream, "anthropic", max_calls=1)
 
     assert outcome.calls_made == 1
-    assert provider.calls[0]["response_model"] is None
+    assert provider.calls[0]["response_model"] is ResearchStepReport
     with connect() as con:
         branch_statuses = con.execute(
             """

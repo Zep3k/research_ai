@@ -16,16 +16,21 @@ class ModelSpec:
     output_usd_per_million: float
 
 
-# Verified 2026-09-25 against the official provider pages:
+# Verified 2026-09-27 against the official provider pages:
 # https://platform.openai.com/docs/models and
 # https://www.anthropic.com/claude/opus
 # These are standard, uncached, global API rates. Update this table deliberately;
 # an unknown model must never be treated as free.
 MODEL_SPECS = {
+    "gpt-6-luna": ModelSpec("openai", 0.10, 0.50),
+    "gpt-6-sol": ModelSpec("openai", 2.0, 10.0),
+    "gpt-6-astra": ModelSpec("openai", 10.0, 50.0),
     "gpt-5.6-sol": ModelSpec("openai", 4.0, 20.0),
     "gpt-5.6-terra": ModelSpec("openai", 2.0, 12.0),
     "gpt-5.6-luna": ModelSpec("openai", 0.20, 1.20),
     "claude-opus-5-5": ModelSpec("anthropic", 4.0, 20.0),
+    "claude-sonnet-5": ModelSpec("anthropic", 2.0, 10.0),
+    "claude-fable-5-1": ModelSpec("anthropic", 10.0, 50.0),
 }
 
 
@@ -88,7 +93,7 @@ class OpenAIProvider(Provider):
         from openai import OpenAI
         if not os.getenv("OPENAI_API_KEY"):
             raise ConfigurationError("OPENAI_API_KEY is not set.")
-        self.client = OpenAI()
+        self.client = OpenAI(max_retries=0)
 
     def complete(
         self,
@@ -136,7 +141,7 @@ class AnthropicProvider(Provider):
         import anthropic
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise ConfigurationError("ANTHROPIC_API_KEY is not set.")
-        self.client = anthropic.Anthropic()
+        self.client = anthropic.Anthropic(max_retries=0)
 
     def complete(
         self,
@@ -148,10 +153,35 @@ class AnthropicProvider(Provider):
         response_model: type[BaseModel] | None = None,
     ) -> ModelResult:
         get_model_spec(model, self.name)
+        output_config = {"effort": effort}
+        if response_model is not None:
+            from anthropic import transform_schema
+
+            # Use the SDK's supported schema subset, then validate the full
+            # Pydantic contract locally after usage has been recorded.
+            # The SDK moves `const` to a description; preserve single-literal
+            # artifact tags as supported one-value enums before conversion.
+            schema = response_model.model_json_schema()
+
+            def normalize_literals(node):
+                if isinstance(node, dict):
+                    if "const" in node:
+                        node["enum"] = [node.pop("const")]
+                    for value in node.values():
+                        normalize_literals(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        normalize_literals(value)
+
+            normalize_literals(schema)
+            output_config["format"] = {
+                "type": "json_schema",
+                "schema": transform_schema(schema),
+            }
         message = self.client.messages.create(
             model=model,
             max_tokens=max_output_tokens,
-            output_config={"effort": effort},
+            output_config=output_config,
             messages=[{"role": "user", "content": prompt}],
         )
         text = "\n".join(

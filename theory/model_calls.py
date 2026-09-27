@@ -96,6 +96,7 @@ def call_model(
     max_output_tokens: int,
     estimated_max_cost_usd: float,
     response_model: type[BaseModel] | None = None,
+    effort: str = "high",
 ) -> ModelResult:
     call_id = _start_call(
         run_id=run_id,
@@ -109,7 +110,7 @@ def call_model(
         result = provider.complete(
             model=model,
             prompt=prompt,
-            effort="high",
+            effort=effort,
             max_output_tokens=max_output_tokens,
             response_model=response_model,
         )

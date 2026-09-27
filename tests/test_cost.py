@@ -6,6 +6,19 @@ from theory.graph import create_workstream
 from theory.providers import conservative_call_cost, estimate_cost
 
 
+@pytest.mark.parametrize("model,input_rate,output_rate", [
+    ("gpt-6-luna", 0.10, 0.50),
+    ("gpt-6-sol", 2.0, 10.0),
+    ("gpt-6-astra", 10.0, 50.0),
+    ("claude-sonnet-5", 2.0, 10.0),
+    ("claude-opus-5-5", 4.0, 20.0),
+    ("claude-fable-5-1", 10.0, 50.0),
+])
+def test_current_standard_uncached_rates(model, input_rate, output_rate):
+    assert estimate_cost(model, 1_000_000, 0) == input_rate
+    assert estimate_cost(model, 0, 1_000_000) == output_rate
+
+
 def test_openai_cost():
     assert abs(estimate_cost("gpt-5.6-sol", 1_000_000, 1_000_000) - 24.0) < 1e-9
 
