@@ -1851,11 +1851,22 @@ def _validate_step_report(
             raise ModelOutputError("Reframe requires an inspectable contract-grounded necessity_audit.")
         if {clause.entity_id for clause in audit.contract_clauses} != cited:
             raise ModelOutputError("Every materially used contract clause must be explicitly cited.")
-        if audit.parent_requirement not in audit.contract_clauses:
-            raise ModelOutputError("The exact parent requirement must be a cited contract clause.")
         for clause in audit.contract_clauses:
             if not clause.quote.strip() or clause.quote not in contract_bodies[clause.entity_id]:
                 raise ModelOutputError("Contract grounding requires exact quotations from the cited input body.")
+        parent = audit.parent_requirement
+        if parent.entity_id not in cited:
+            raise ModelOutputError("The parent requirement must cite a contract entity in contract_clauses.")
+        if not parent.quote.strip() or parent.quote not in contract_bodies[parent.entity_id]:
+            raise ModelOutputError("The parent requirement must quote an exact nonempty contract substring.")
+        if not any(
+            clause.entity_id == parent.entity_id
+            and (parent.quote in clause.quote or clause.quote in parent.quote)
+            for clause in audit.contract_clauses
+        ):
+            raise ModelOutputError(
+                "The parent requirement must have compatible textual scope with a cited contract clause."
+            )
         used_by_artifacts = set().union(*(set(a.related_entity_ids) for a in report.artifacts)) & contract_ids
         if not used_by_artifacts <= cited:
             raise ModelOutputError("Artifacts reference materially used contract inputs omitted from the audit.")

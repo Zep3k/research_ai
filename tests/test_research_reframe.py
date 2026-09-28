@@ -618,6 +618,93 @@ def test_wa_cannot_ground_weak_consistency_in_goal_title_only(wa, omission):
         _validate_step_report(ResearchStepReport.model_validate(raw), context, choice)
 
 
+@pytest.mark.parametrize(("parent_quote", "clause_quote"), (
+    (CONTRACT, CONTRACT),
+    ("if an honest party decides y", CONTRACT),
+    (CONTRACT, "if an honest party decides y"),
+))
+def test_reframe_parent_and_cited_clause_accept_exact_nested_contract_quotes(
+    wa, parent_quote, clause_quote,
+):
+    context, _, _, moves, _ = planning(wa)
+    choice = next(move for move in moves if move.operation == "reframe").to_operation_choice()
+    raw = responder(wa, replacement=True)(
+        {"operation": "reframe", "target_entity_id": wa[3],
+         "required_consumed_entity_ids": []}, None,
+    )
+    raw["necessity_audit"]["parent_requirement"]["quote"] = parent_quote
+    raw["necessity_audit"]["contract_clauses"][0]["quote"] = clause_quote
+    _validate_step_report(ResearchStepReport.model_validate(raw), context, choice)
+
+
+@pytest.mark.parametrize(("parent_quote", "clause_quote"), (
+    (CONTRACT + " Extra unsupported requirement.", "if an honest party decides y"),
+    (CONTRACT, CONTRACT + " Extra unsupported requirement."),
+    ("if an honest party decides y", "every honest party decides y or bottom"),
+    ("   ", CONTRACT),
+))
+def test_reframe_parent_rejects_inexact_or_unrelated_same_entity_quotes(
+    wa, parent_quote, clause_quote,
+):
+    context, _, _, moves, _ = planning(wa)
+    choice = next(move for move in moves if move.operation == "reframe").to_operation_choice()
+    raw = responder(wa, replacement=True)(
+        {"operation": "reframe", "target_entity_id": wa[3],
+         "required_consumed_entity_ids": []}, None,
+    )
+    raw["necessity_audit"]["parent_requirement"]["quote"] = parent_quote
+    raw["necessity_audit"]["contract_clauses"][0]["quote"] = clause_quote
+    with pytest.raises(ModelOutputError, match="parent requirement|Parent requirement|Contract grounding"):
+        _validate_step_report(ResearchStepReport.model_validate(raw), context, choice)
+
+
+@pytest.mark.parametrize("misattribution", ("uncited_entity", "wrong_body"))
+def test_reframe_parent_rejects_uncited_entity_or_misattributed_quote(wa, misattribution):
+    context, _, _, moves, _ = planning(wa)
+    choice = next(move for move in moves if move.operation == "reframe").to_operation_choice()
+    raw = responder(wa, replacement=True)(
+        {"operation": "reframe", "target_entity_id": wa[3],
+         "required_consumed_entity_ids": []}, None,
+    )
+    parent = raw["necessity_audit"]["parent_requirement"]
+    if misattribution == "uncited_entity":
+        parent["entity_id"] = wa[1]
+    else:
+        with connect() as con:
+            con.execute("UPDATE entities SET body='Independent goal clause.' WHERE id=?", (wa[1],))
+        context = for_workstream(wa[0])
+        parent["quote"] = "Independent goal clause."
+    with pytest.raises(ModelOutputError, match="parent requirement|Parent requirement"):
+        _validate_step_report(ResearchStepReport.model_validate(raw), context, choice)
+
+
+def test_real_reframe_call_accepts_nested_exact_parent_quote(wa, monkeypatch):
+    def execute(decision, prompt):
+        raw = responder(wa, replacement=True)(decision, prompt)
+        raw["necessity_audit"]["parent_requirement"]["quote"] = (
+            "if an honest party decides y"
+        )
+        return raw
+
+    requests, _ = install_providers(
+        monkeypatch, execute=execute, select=select_audit_or_attack,
+    )
+    outcome = research(wa[0], provider_name="auto", max_calls=1)
+    assert outcome.calls_made == 1
+    assert outcome.strategy_calls_made == 1
+    assert len(requests) == outcome.total_api_calls_made == 2
+    context = for_workstream(wa[0])
+    finding_id = next(
+        entity_id for entity_id in outcome.artifact_ids
+        if context.attributes[entity_id]["research_artifact_type"] == "finding"
+    )
+    audit = json.loads(context.attributes[finding_id]["research_necessity_audit"])
+    assert audit["parent_requirement"] == {
+        "entity_id": wa[2], "quote": "if an honest party decides y",
+    }
+    assert audit["contract_clauses"] == [{"entity_id": wa[2], "quote": CONTRACT}]
+
+
 def test_missing_replacement_premise_is_rejected_without_retry(wa, monkeypatch):
     execute = responder(wa, replacement=True)
     def incomplete(decision, prompt):
@@ -708,6 +795,8 @@ def test_reframe_prompt_uses_parent_scope_and_explicit_premises(wa):
     assert "not absence of evidence" in prompt
     assert "Definition, Assumption, Model, or Technique" in prompt
     assert "parent_requirement" in prompt and "contract_clauses" in prompt
+    assert "Prefer reusing the exact same {entity_id,quote}" in prompt
+    assert "make one quote contain the other" in prompt
     assert "replacement_obligation_keys" in prompt
 
 
