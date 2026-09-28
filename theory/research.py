@@ -31,7 +31,7 @@ from .research_progress import (
 )
 
 
-STRATEGIST_MAX_OUTPUT_TOKENS = 1500
+STRATEGIST_MAX_OUTPUT_TOKENS = 4000
 RESEARCH_MAX_OUTPUT_TOKENS = 12_000
 MAX_CONTROLLER_CALLS = 20
 INTERRUPTED_ITERATION_ERROR = (
@@ -1450,8 +1450,10 @@ def generate_legal_research_moves(
     workstream_id: int,
     primary: dict,
     history: tuple[dict, ...],
+    *,
+    strategy_enabled: bool = True,
 ) -> tuple[LegalResearchMove, ...]:
-    """Pure frontier enumeration over the same graph policy as the baseline."""
+    """Pure frontier enumeration, with one optional strategic branch escape."""
     baseline = choose_next_operation(context, workstream_id, primary, history)
     open_ids = _open_obligation_ids(context, workstream_id, int(primary["id"]))
     if open_ids:
@@ -1468,6 +1470,14 @@ def generate_legal_research_moves(
                     "Audit whether this provisional obligation is required by the problem contract.",
                     open_obligation_ids=open_ids, focus_obligation_id=obligation,
                 ))
+        if strategy_enabled:
+            choices.append(OperationChoice(
+                operation="develop",
+                target_entity_id=int(primary["id"]),
+                rationale="Explore a genuinely different top-level route from the supplied problem contract without assuming the current obligation decomposition.",
+                open_obligation_ids=open_ids,
+                focus_obligation_id=None,
+            ))
     else:
         choices = [baseline]
         # Expand only the existing concrete, unattacked proof-candidate stage.
@@ -1690,6 +1700,11 @@ reframe requests a bounded scientific audit; it does NOT declare an obligation
 universally unnecessary. A bypass is reversible if its alternative route fails.
 Do not invent requirements absent from the contract or automatically prefer reframe.
 
+A primary-goal develop move is available as a branch escape when the current
+obligation decomposition appears route-specific, stronger than the contract,
+or repeatedly expands without resolution. Prefer it only when a materially
+different route could be informative; do not use it for routine exploration.
+
 Recent progress telemetry distinguishes:
 - closure: a branch/candidate/obligation was actually closed or challenged;
 - validation: a concrete candidate was tested;
@@ -1787,6 +1802,16 @@ Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
     operation_output_instructions = _synthesis_output_instructions(
         choice, required_artifact_related_entity_ids
     )
+    if (choice.operation == "develop" and choice.target_entity_id == int(primary["id"])
+            and choice.open_obligation_ids and choice.focus_obligation_id is None):
+        operation_output_instructions += """
+Develop a genuinely different top-level route from the exact problem contract.
+Do not assume the current open obligations are necessary.
+Do not merely refine, rename, or continue the current route.
+Reuse supplied primitives when useful, but seek a materially different proof/protocol mechanism.
+Any new unresolved premises must become explicit proof obligations.
+Do not mark existing obligations resolved merely because a new branch exists.
+"""
     necessity_example = "not_applicable"
     contract_example: list[int] = []
     audit_example = None
@@ -2772,10 +2797,13 @@ def _run_research(
                 strategy_calls_made,
             )
         baseline_choice = choose_next_operation(full_context, workstream_id, primary, history)
-        legal_moves = generate_legal_research_moves(full_context, workstream_id, primary, history)
+        strategy_enabled = strategy == "auto" and provider_name == "auto"
+        legal_moves = generate_legal_research_moves(
+            full_context, workstream_id, primary, history, strategy_enabled=strategy_enabled,
+        )
         selection = select_research_move(
             baseline_choice=baseline_choice, legal_moves=legal_moves,
-            strategy_enabled=strategy == "auto" and provider_name == "auto",
+            strategy_enabled=strategy_enabled,
         )
         if selection is None:
             model = _strategist_model(cfg)

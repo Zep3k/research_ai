@@ -114,6 +114,7 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     assert [(move.operation, move.target_entity_id, move.focus_obligation_id) for move in moves] == [
         ("develop", a, a), ("attack", proof, b),
         ("reframe", a, a), ("reframe", b, b),
+        ("develop", primary_id, None),
     ]
     assert baseline.operation == "develop" and baseline.target_entity_id == a
     decision = StrategistDecision(selected_move_id=moves[1].move_id, rationale="Attack the concrete candidate now.")
@@ -182,6 +183,7 @@ def test_baseline_and_explicit_provider_ablations(historical, monkeypatch, provi
     assert row["selected_move_id"] == LegalResearchMove.from_choice(baseline).move_id
     assert row["selection_rationale"] == baseline.rationale
     assert row["strategy_provider"] is row["strategy_model"] is None
+    assert f"develop:{primary}:none:none" not in json.loads(row["legal_move_ids_json"])
 
 
 def test_single_move_costs_zero_strategy_calls(monkeypatch, tmp_path):
@@ -307,7 +309,7 @@ def test_newest_proof_only_and_leaf_frontier(historical):
     mark_candidate_attempt(new_proof, b)
     child = add_linked_research_entity(workstream, "OpenQuestion", "Child of A", proof_obligation=True, related_entity_ids=(a,))
     _, _, moves, _ = load_moves(workstream, primary)
-    assert {move.focus_obligation_id for move in moves} == {b, child}
+    assert {move.focus_obligation_id for move in moves} == {b, child, None}
     assert [move.target_entity_id for move in moves if move.operation == "attack"] == [new_proof]
     assert old_proof not in {move.target_entity_id for move in moves}
 

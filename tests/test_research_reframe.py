@@ -19,7 +19,7 @@ from theory.research import (
 )
 from theory.research_context import for_workstream
 from test_research import (
-    add_linked_research_entity, artifact, decision_from_prompt, init_workspace,
+    add_linked_research_entity, artifact, completed_history, decision_from_prompt, init_workspace,
     make_research_workstream, step_report,
 )
 from test_research_strategy import install_providers
@@ -55,6 +55,84 @@ def planning(wa):
     moves = generate_legal_research_moves(context, workstream, primary, history)
     state = build_research_state(context, workstream_id=workstream, primary=primary, history=history, legal_moves=moves)
     return context, primary, history, moves, state
+
+
+def test_wa_primary_develop_escape_preserves_old_route(wa, monkeypatch):
+    workstream, primary_id, contract, obligation = wa
+    broadcast = add_linked_research_entity(
+        workstream, "OpenQuestion", "Broadcast must yield identical per-slot outputs.",
+        proof_obligation=True,
+    )
+    context, primary, history, moves, state = planning(wa)
+    baseline = choose_next_operation(context, workstream, primary, history)
+    ordinary = generate_legal_research_moves(
+        context, workstream, primary, history, strategy_enabled=False,
+    )
+    escape_id = f"develop:{primary_id}:none:none"
+    assert [move.move_id for move in moves].count(escape_id) == 1
+    assert moves[:-1] == ordinary
+    assert LegalResearchMove.from_choice(baseline) in ordinary
+    assert baseline.operation == "develop" and baseline.target_entity_id == obligation
+    assert {(move.operation, move.focus_obligation_id) for move in ordinary} == {
+        (operation, focus) for operation in ("develop", "reframe")
+        for focus in (obligation, broadcast)
+    }
+    escape = moves[-1].to_operation_choice()
+    assert escape.open_obligation_ids == (obligation, broadcast)
+    assert escape.focus_obligation_id is None
+    before = {oid: copy.deepcopy(context.attributes[oid]) for oid in (obligation, broadcast)}
+    instruction = "Develop a genuinely different top-level route from the exact problem contract."
+    assert instruction not in _research_prompt(context, primary, baseline)
+
+    def select(payload):
+        assert any(item["body"] == CONTRACT for item in payload["problem_contract"])
+        return {"selected_move_id": escape_id, "rationale": "Identical outputs are stronger than weak consistency; explore conflict visibility."}
+
+    def execute(decision, _):
+        assert decision["target_entity_id"] == primary_id
+        assert decision["focus_obligation_id"] is None
+        return step_report(decision, [
+            artifact("protocol_component", "Use conflict visibility to output bottom on conflicting certificates, allowing honest outputs y or bottom.",
+                     "conflict_visibility_protocol", [primary_id, contract]),
+            artifact("proof_obligation", "Show conflict visibility prevents incompatible non-bottom honest decisions before termination.",
+                     "conflict_visibility_safety", [primary_id, contract], epistemic_status="unresolved"),
+        ])
+
+    requests, _ = install_providers(monkeypatch, select=select, execute=execute)
+    outcome = research(workstream, max_calls=1)
+    assert (outcome.calls_made, outcome.strategy_calls_made, outcome.total_api_calls_made) == (1, 1, 2)
+    assert outcome.stop_reason == "max_calls_exhausted"
+    assert len(outcome.artifact_ids) == 2
+    assert instruction in requests[1][1]["prompt"]
+    assert CONTRACT in requests[1][1]["prompt"]
+    assert requests[1][1]["max_output_tokens"] == 12_000
+    context, primary, history, moves, _ = planning(wa)
+    for oid in (obligation, broadcast):
+        assert context.attributes[oid] == before[oid]
+    new_obligation = next(oid for oid in outcome.artifact_ids
+                          if context.attributes[oid].get("research_artifact_type") == "proof_obligation")
+    assert set(_open_obligation_ids(context, workstream, primary_id)) == {obligation, broadcast, new_obligation}
+    assert any(move.operation == "develop" and move.focus_obligation_id == new_obligation for move in moves)
+    assert any(move.operation == "reframe" and move.focus_obligation_id == new_obligation for move in moves)
+    assert [move.move_id for move in moves].count(escape_id) == 1
+    candidate = add_linked_research_entity(
+        workstream, "Lemma", "Conditional conflict visibility safety bound",
+        related_entity_ids=(new_obligation,),
+    )
+    context, primary, history, moves, _ = planning(wa)
+    synthesis = next(move for move in moves if move.focus_obligation_id == new_obligation
+                     and move.operation == "synthesize")
+    history += (completed_history("synthesize", new_obligation,
+                                  consumed_entity_ids=synthesis.consumed_entity_ids),)
+    assert any(move.operation == "prove" and move.target_entity_id == candidate
+               and move.focus_obligation_id == new_obligation
+               for move in generate_legal_research_moves(context, workstream, primary, history))
+    proof = add_linked_research_entity(
+        workstream, "ProofAttempt", "Candidate conflict visibility safety proof",
+        related_entity_ids=(new_obligation,),
+    )
+    assert any(move.operation == "attack" and move.target_entity_id == proof
+               and move.focus_obligation_id == new_obligation for move in planning(wa)[3])
 
 
 def responder(wa, *, necessity="alternative_route_found", attack="no_critical_issue", replacement=False):
@@ -126,7 +204,10 @@ def test_exact_contract_and_obligation_statement_are_pure_untruncated(wa, monkey
 def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, replacement):
     workstream, primary_id, contract, obligation = wa
     context, primary, history, moves, state = planning(wa)
-    assert [move.move_id for move in moves] == [f"develop:{obligation}:{obligation}:none", f"reframe:{obligation}:{obligation}:none"]
+    assert [move.move_id for move in moves] == [
+        f"develop:{obligation}:{obligation}:none", f"reframe:{obligation}:{obligation}:none",
+        f"develop:{primary_id}:none:none",
+    ]
     assert LegalResearchMove.from_choice(choose_next_operation(context, workstream, primary, history)) == moves[0]
     assert any(entity.body == CONTRACT for entity in state.problem_contract)
     stage = []
@@ -150,15 +231,14 @@ def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, rep
     requests, constructed = install_providers(monkeypatch, execute=inspect, select=select_audit_or_attack)
     outcome = research(workstream, max_calls=2)
     expected = [("openai", "gpt-6-luna"), ("openai", "gpt-6-sol")]
-    if replacement:
-        expected.append(("openai", "gpt-6-luna"))
+    expected.append(("openai", "gpt-6-luna"))
     expected.append(("anthropic", "claude-opus-5-5"))
     assert [(name, request["model"]) for name, request in requests] == expected
     assert requests[1][1]["effort"] == "high" and requests[-1][1]["effort"] == "medium"
     assert CONTRACT in requests[0][1]["prompt"] and CONTRACT in requests[1][1]["prompt"]
     assert "independent attack on a necessity-audit finding" in requests[-1][1]["prompt"]
     assert constructed == ["openai", "anthropic"]
-    assert outcome.calls_made == 2 and outcome.strategy_calls_made == (2 if replacement else 1)
+    assert outcome.calls_made == 2 and outcome.strategy_calls_made == 2
     assert outcome.total_api_calls_made == len(requests) <= 4
     assert stage
     after, _, _, remaining_moves, _ = planning(wa)
@@ -211,7 +291,7 @@ def test_failed_independent_attack_keeps_original_open_without_repeat_audit(wa, 
     assert context.attributes[obligation]["research_necessity_audit_state"] == ("challenged" if attack == "critical_issue" else "inconclusive")
     assert obligation in _open_obligation_ids(context, workstream, primary_id)
     assert all(move.operation != "reframe" for move in moves)
-    assert len(requests) == 3
+    assert len(requests) == 4
 
 
 def test_input_obligations_never_offer_reframe(wa):
@@ -219,7 +299,7 @@ def test_input_obligations_never_offer_reframe(wa):
     with connect() as con:
         link_workstream_entity(con, workstream, obligation, "input")
     _, _, _, moves, _ = planning(wa)
-    assert len(moves) == 1 and moves[0].operation == "develop"
+    assert len(moves) == 2 and all(move.operation == "develop" for move in moves)
 
 
 @pytest.mark.parametrize("provider,strategy", [("auto", "off"), ("openai", "auto"), ("anthropic", "auto")])
