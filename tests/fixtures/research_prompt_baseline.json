@@ -1,0 +1,65 @@
+{
+  "develop": {
+    "words": "f302a2c36bdfa0a987ce42d08a9b6a89573469bdc658bf25673ecb9f81f2e781",
+    "decision_and_graph": "bb9bc6816341302363c70ea5de708cf4de7af732e44f897f8f4a0e67e4900725",
+    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+  },
+  "focused_develop": {
+    "words": "b7ef83b9597e061fa090b4c8678fcaed01c206b859b7ee6dd608068bac2509e1",
+    "decision_and_graph": "8e2e78528c0a5d5fb1c4f9b89773fce25a1f4e55ec3630b0293abf7eda841c1a",
+    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+  },
+  "escape_develop": {
+    "words": "15422e9dab212a4d334d9bb9ac01f2333c51d6bbab95c45679363b68ab3d588b",
+    "decision_and_graph": "9700e9ddd24f4e8a4329582292d59b6d25bcd82f2c19f629c4adcabc7e49a509",
+    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+  },
+  "contract_develop": {
+    "words": "198fc2cd5fb8f14fd69b08c60bd30444b6b4118f44cf642a5436e9a6ee7080e3",
+    "decision_and_graph": "bb9bc6816341302363c70ea5de708cf4de7af732e44f897f8f4a0e67e4900725",
+    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+  },
+  "prove": {
+    "words": "8ac9efc8dd5cc7c06a70e752bab937ccf3d6cb7ba4378329732e22329e3c9943",
+    "decision_and_graph": "3f544f0e87d5fbd676e8755a0aa5a8c336fa81bc390c96d62a747432fb570cbb",
+    "example": "2bb90aed34f1e17d65734fad11efd52894d8fd714b7fa1ad067500e9601a8178"
+  },
+  "open_prove": {
+    "words": "b0cf7d49c63af66a1dc232fe56df96cd0fe5fb288e03aac0c471fda07be95995",
+    "decision_and_graph": "f2e5ff2345414b674b51be1b47ce33d778cd2fdf7fd71ab0cfb94d325918ebfe",
+    "example": "2bb90aed34f1e17d65734fad11efd52894d8fd714b7fa1ad067500e9601a8178"
+  },
+  "focused_prove": {
+    "words": "5c0097f7bd7db815180b314678d7730c24f839dff99a229daeefe60a2e67aa3f",
+    "decision_and_graph": "6567fa153305fb37d0d074f56d5541c9ae22d8d8b3220cb72ff251339f03f93f",
+    "example": "45e55898a10db67704fcc51a063c731b558d1b1c4c23a66fb376505453ea66b8"
+  },
+  "attack": {
+    "words": "faee2bda7b3e038250ffa1e8136f1790baec3a4076bf771874f84a38f987f259",
+    "decision_and_graph": "486c9d673c3e8063fb186f3457a541b4e12fcf1e665fa40ee4d2f6d4d1185875",
+    "example": "8bd5c789b0552fba6893256400b466bf4b50f5a541e495e0b0d9ca3865360335"
+  },
+  "reframe_attack": {
+    "words": "94deb8a36b5fc752d189debf38b6f1fb61fbf42e99238c928b7f60b5b28f0d15",
+    "decision_and_graph": "b513e1c92179a3000aa19367866744da82b541c8f166c03f83bb634969498922",
+    "example": "8bd5c789b0552fba6893256400b466bf4b50f5a541e495e0b0d9ca3865360335"
+  },
+  "synthesize": {
+    "words": "0120941083fbceefc038f8ea0bfe18a967b40c23211d9451d464fb3cefc2c108",
+    "decision_and_graph": "8f417e8eaec82eeb75e7636c68034af4ea4185cf1b24913dc0822d671ecab8f2",
+    "example": "17812f34115d09e111ab7e7bfcfb937a0649c8d64053c6019758f06f875fd2e1"
+  },
+  "primary_synthesize": {
+    "words": "72b4b706bc58642030b81569af901bb266dfb1a0636f653a1b68cb94d34bcb9f",
+    "decision_and_graph": "8f417e8eaec82eeb75e7636c68034af4ea4185cf1b24913dc0822d671ecab8f2",
+    "example": "17812f34115d09e111ab7e7bfcfb937a0649c8d64053c6019758f06f875fd2e1"
+  },
+  "reframe": {
+    "words": "bc75657fae60887d5fe681217aaa1c1c57ee05f1d2f8e0913b74597a6842db8c",
+    "decision_and_graph": "802dd25f6421a7a9f1aa38c682fb5ad0e12cc5fc1a20511c7af2fb1600c4a992",
+    "example": "2bf23186778f198ab1159c79fee3ff9eaa2dde225f285394fc14f545affdfc6f"
+  },
+  "strategist": {
+    "words": "3acf78ab338de8848f782bad69823f73c0096f8c085ad8af65ededb658e4420a"
+  }
+}

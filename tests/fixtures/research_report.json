@@ -1,0 +1,604 @@
+{
+  "schema_version": 1,
+  "workstream_id": 1,
+  "goal": "Find a weak-agreement construction",
+  "primary_goal_ids": [
+    1
+  ],
+  "lifecycle_status": "active",
+  "summary": "",
+  "stop_reason": null,
+  "stop_reason_source": null,
+  "last_recorded_stop_reason": null,
+  "frontier": {
+    "description": "Independent candidate attacks are pending.",
+    "open_obligation_ids": [
+      3
+    ],
+    "pending_attack_ids": [
+      4
+    ],
+    "candidate_ids": [
+      4
+    ],
+    "blocked_branch_ids": [
+      6
+    ]
+  },
+  "entities": [
+    {
+      "id": 1,
+      "entity_type": "ResearchIdea",
+      "title": "Weak agreement under partial synchrony",
+      "statement": "Weak agreement under partial synchrony",
+      "lifecycle_status": "active",
+      "trust_state": "unverified",
+      "link_roles": [
+        "input"
+      ],
+      "model_artifact": false,
+      "model_epistemic_status": null,
+      "branch_state": null,
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [],
+      "sources": []
+    },
+    {
+      "id": 2,
+      "entity_type": "OpenQuestion",
+      "title": "Rule out conflicting certificates",
+      "statement": "Rule out conflicting certificates",
+      "lifecycle_status": "active",
+      "trust_state": "quarantined",
+      "link_roles": [
+        "created"
+      ],
+      "model_artifact": true,
+      "model_epistemic_status": null,
+      "branch_state": null,
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [],
+      "sources": []
+    },
+    {
+      "id": 3,
+      "entity_type": "OpenQuestion",
+      "title": "Bound the fallback disagreement probability",
+      "statement": "Bound the fallback disagreement probability",
+      "lifecycle_status": "active",
+      "trust_state": "quarantined",
+      "link_roles": [
+        "created"
+      ],
+      "model_artifact": true,
+      "model_epistemic_status": null,
+      "branch_state": null,
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [],
+      "sources": []
+    },
+    {
+      "id": 4,
+      "entity_type": "Lemma",
+      "title": "A conditional fallback bound",
+      "statement": "A conditional fallback bound",
+      "lifecycle_status": "active",
+      "trust_state": "quarantined",
+      "link_roles": [
+        "created"
+      ],
+      "model_artifact": true,
+      "model_epistemic_status": "inference",
+      "branch_state": "promising",
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [
+        3
+      ],
+      "sources": [
+        {
+          "id": 2,
+          "paper_entity_id": null,
+          "paper_title": null,
+          "source_type": "paper_locator",
+          "page": null,
+          "section": "Unidentified appendix",
+          "theorem": null,
+          "excerpt": null,
+          "external_url": null,
+          "identifiable_origin": false
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "entity_type": "Finding",
+      "title": "A fallback route bypasses certificate uniqueness",
+      "statement": "A fallback route bypasses certificate uniqueness",
+      "lifecycle_status": "active",
+      "trust_state": "quarantined",
+      "link_roles": [
+        "created"
+      ],
+      "model_artifact": true,
+      "model_epistemic_status": null,
+      "branch_state": null,
+      "bounded_attack_state": "survived_attack",
+      "attempted_obligation_ids": [],
+      "sources": []
+    },
+    {
+      "id": 6,
+      "entity_type": "FailedApproach",
+      "title": "Identical certificates fail at the boundary",
+      "statement": "Identical certificates fail at the boundary",
+      "lifecycle_status": "active",
+      "trust_state": "quarantined",
+      "link_roles": [
+        "created"
+      ],
+      "model_artifact": true,
+      "model_epistemic_status": null,
+      "branch_state": "refuted",
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [],
+      "sources": []
+    },
+    {
+      "id": 7,
+      "entity_type": "Paper",
+      "title": "A source on weak agreement",
+      "statement": "A source on weak agreement",
+      "lifecycle_status": "active",
+      "trust_state": "unverified",
+      "link_roles": [
+        "evidence"
+      ],
+      "model_artifact": false,
+      "model_epistemic_status": null,
+      "branch_state": null,
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [],
+      "sources": [
+        {
+          "id": 1,
+          "paper_entity_id": 7,
+          "paper_title": "A source on weak agreement",
+          "source_type": "paper_locator",
+          "page": 7,
+          "section": "3.2",
+          "theorem": "Lemma 4",
+          "excerpt": "Conditional agreement bound.",
+          "external_url": null,
+          "identifiable_origin": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "entity_type": "Lemma",
+      "title": "Source-backed conditional lemma",
+      "statement": "Source-backed conditional lemma",
+      "lifecycle_status": "active",
+      "trust_state": "sourced",
+      "link_roles": [
+        "evidence"
+      ],
+      "model_artifact": false,
+      "model_epistemic_status": null,
+      "branch_state": null,
+      "bounded_attack_state": null,
+      "attempted_obligation_ids": [],
+      "sources": [
+        {
+          "id": 1,
+          "paper_entity_id": 7,
+          "paper_title": "A source on weak agreement",
+          "source_type": "paper_locator",
+          "page": 7,
+          "section": "3.2",
+          "theorem": "Lemma 4",
+          "excerpt": "Conditional agreement bound.",
+          "external_url": null,
+          "identifiable_origin": true
+        }
+      ]
+    }
+  ],
+  "obligations": [
+    {
+      "entity_id": 2,
+      "recorded_state": "bypassed",
+      "open_under_controller_rules": false,
+      "necessity_audit_state": "bypassed",
+      "candidate_ids": [],
+      "surviving_candidate_id": null,
+      "routes": [
+        {
+          "candidate_id": 5,
+          "activated_iteration_id": 2,
+          "replacement_obligation_ids": [
+            3
+          ],
+          "survives_under_recorded_graph": true
+        }
+      ],
+      "reactivations": []
+    },
+    {
+      "entity_id": 3,
+      "recorded_state": "candidate_pending_attack",
+      "open_under_controller_rules": true,
+      "necessity_audit_state": null,
+      "candidate_ids": [
+        4
+      ],
+      "surviving_candidate_id": null,
+      "routes": [],
+      "reactivations": []
+    }
+  ],
+  "artifact_groups": [
+    {
+      "role": "problem_contract",
+      "entity_ids": [
+        1
+      ]
+    },
+    {
+      "role": "proof_candidates",
+      "entity_ids": [
+        4
+      ]
+    },
+    {
+      "role": "findings",
+      "entity_ids": [
+        5
+      ]
+    },
+    {
+      "role": "proof_obligations",
+      "entity_ids": [
+        2,
+        3
+      ]
+    },
+    {
+      "role": "negative_results",
+      "entity_ids": [
+        6
+      ]
+    },
+    {
+      "role": "source_material",
+      "entity_ids": [
+        7,
+        8
+      ]
+    }
+  ],
+  "latest_material_progress": {
+    "id": 3,
+    "number": 3,
+    "operation": "prove",
+    "target_entity_id": 4,
+    "focus_obligation_id": 3,
+    "status": "completed",
+    "rationale": "Test the recorded route",
+    "material_progress": true,
+    "progress_class": "candidate_created",
+    "progress_level": "construction",
+    "resolution_progress": null,
+    "open_obligations_before": null,
+    "open_obligations_after": null,
+    "artifact_ids": [
+      4
+    ],
+    "consumed_entity_ids": [],
+    "events": [
+      {
+        "kind": "candidate_created",
+        "entity_ids": [
+          4
+        ],
+        "obligation_ids": [
+          2
+        ]
+      }
+    ],
+    "bounded_attack_outcome": "not_applicable",
+    "necessity_outcome": null,
+    "stop_reason": null,
+    "error_message": null,
+    "created_at": "2026-09-28T12:00:00+00:00",
+    "completed_at": "2026-09-28T12:00:00+00:00"
+  },
+  "recent_iterations": [
+    {
+      "id": 3,
+      "number": 3,
+      "operation": "prove",
+      "target_entity_id": 4,
+      "focus_obligation_id": 3,
+      "status": "completed",
+      "rationale": "Test the recorded route",
+      "material_progress": true,
+      "progress_class": "candidate_created",
+      "progress_level": "construction",
+      "resolution_progress": null,
+      "open_obligations_before": null,
+      "open_obligations_after": null,
+      "artifact_ids": [
+        4
+      ],
+      "consumed_entity_ids": [],
+      "events": [
+        {
+          "kind": "candidate_created",
+          "entity_ids": [
+            4
+          ],
+          "obligation_ids": [
+            2
+          ]
+        }
+      ],
+      "bounded_attack_outcome": "not_applicable",
+      "necessity_outcome": null,
+      "stop_reason": null,
+      "error_message": null,
+      "created_at": "2026-09-28T12:00:00+00:00",
+      "completed_at": "2026-09-28T12:00:00+00:00"
+    },
+    {
+      "id": 2,
+      "number": 2,
+      "operation": "attack",
+      "target_entity_id": 5,
+      "focus_obligation_id": 2,
+      "status": "completed",
+      "rationale": "Test the recorded route",
+      "material_progress": true,
+      "progress_class": "obligation_bypassed",
+      "progress_level": "validation",
+      "resolution_progress": null,
+      "open_obligations_before": null,
+      "open_obligations_after": null,
+      "artifact_ids": [],
+      "consumed_entity_ids": [],
+      "events": [
+        {
+          "kind": "obligation_bypassed",
+          "entity_ids": [
+            5
+          ],
+          "obligation_ids": [
+            2
+          ]
+        }
+      ],
+      "bounded_attack_outcome": "no_critical_issue",
+      "necessity_outcome": null,
+      "stop_reason": null,
+      "error_message": null,
+      "created_at": "2026-09-28T12:00:00+00:00",
+      "completed_at": "2026-09-28T12:00:00+00:00"
+    },
+    {
+      "id": 1,
+      "number": 1,
+      "operation": "reframe",
+      "target_entity_id": 2,
+      "focus_obligation_id": 2,
+      "status": "completed",
+      "rationale": "Test the recorded route",
+      "material_progress": true,
+      "progress_class": "obligation_audited",
+      "progress_level": "validation",
+      "resolution_progress": null,
+      "open_obligations_before": null,
+      "open_obligations_after": null,
+      "artifact_ids": [
+        3,
+        5
+      ],
+      "consumed_entity_ids": [],
+      "events": [
+        {
+          "kind": "obligation_audited",
+          "entity_ids": [
+            2
+          ],
+          "obligation_ids": [
+            2
+          ]
+        }
+      ],
+      "bounded_attack_outcome": "not_applicable",
+      "necessity_outcome": null,
+      "stop_reason": null,
+      "error_message": null,
+      "created_at": "2026-09-28T12:00:00+00:00",
+      "completed_at": "2026-09-28T12:00:00+00:00"
+    }
+  ],
+  "iteration_count": 3,
+  "reviews": [
+    {
+      "id": 1,
+      "target_entity_id": 5,
+      "review_type": "counterexample_attempt",
+      "result": "no_flaw_found",
+      "issues": "A bounded pass found no critical issue; replacement premise remains open.",
+      "provider": "openai",
+      "model": "gpt-6-sol",
+      "created_at": "2026-09-28T12:00:00+00:00"
+    }
+  ],
+  "unresolved_items": [
+    {
+      "origin": "graph",
+      "record_id": 3,
+      "kind": "open_question",
+      "text": "Bound the fallback disagreement probability",
+      "scope": "recorded_unreconciled"
+    },
+    {
+      "origin": "api_call",
+      "record_id": 2,
+      "kind": "model_uncertainty",
+      "text": "The boundary case remains undecided.",
+      "scope": "recorded_unreconciled"
+    }
+  ],
+  "execution": {
+    "strategy_calls": 1,
+    "execution_calls": 2,
+    "other_calls": 0,
+    "total": {
+      "calls": 3,
+      "completed_calls": 2,
+      "failed_calls": 1,
+      "pending_calls": 0,
+      "input_tokens": 2000,
+      "output_tokens": 200,
+      "cache_read": {
+        "known_tokens": 1200,
+        "unknown_calls": 1
+      },
+      "cache_write": {
+        "known_tokens": 600,
+        "unknown_calls": 1
+      },
+      "cache_write_5m": {
+        "known_tokens": 600,
+        "unknown_calls": 1
+      },
+      "cache_write_1h": {
+        "known_tokens": 0,
+        "unknown_calls": 1
+      },
+      "reasoning": {
+        "known_tokens": 0,
+        "unknown_calls": 3
+      },
+      "cost_usd": 0.002,
+      "pending_admission_usd": 0.0,
+      "unmetered_calls": 1
+    },
+    "models": [
+      {
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "usage": {
+          "calls": 1,
+          "completed_calls": 0,
+          "failed_calls": 1,
+          "pending_calls": 0,
+          "input_tokens": 0,
+          "output_tokens": 0,
+          "cache_read": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "cache_write": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "cache_write_5m": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "cache_write_1h": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "reasoning": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "cost_usd": 0.0,
+          "pending_admission_usd": 0.0,
+          "unmetered_calls": 1
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "usage": {
+          "calls": 1,
+          "completed_calls": 1,
+          "failed_calls": 0,
+          "pending_calls": 0,
+          "input_tokens": 1000,
+          "output_tokens": 100,
+          "cache_read": {
+            "known_tokens": 600,
+            "unknown_calls": 0
+          },
+          "cache_write": {
+            "known_tokens": 300,
+            "unknown_calls": 0
+          },
+          "cache_write_5m": {
+            "known_tokens": 300,
+            "unknown_calls": 0
+          },
+          "cache_write_1h": {
+            "known_tokens": 0,
+            "unknown_calls": 0
+          },
+          "reasoning": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "cost_usd": 0.001,
+          "pending_admission_usd": 0.0,
+          "unmetered_calls": 0
+        }
+      },
+      {
+        "provider": "openai",
+        "model": "gpt-6-sol",
+        "usage": {
+          "calls": 1,
+          "completed_calls": 1,
+          "failed_calls": 0,
+          "pending_calls": 0,
+          "input_tokens": 1000,
+          "output_tokens": 100,
+          "cache_read": {
+            "known_tokens": 600,
+            "unknown_calls": 0
+          },
+          "cache_write": {
+            "known_tokens": 300,
+            "unknown_calls": 0
+          },
+          "cache_write_5m": {
+            "known_tokens": 300,
+            "unknown_calls": 0
+          },
+          "cache_write_1h": {
+            "known_tokens": 0,
+            "unknown_calls": 0
+          },
+          "reasoning": {
+            "known_tokens": 0,
+            "unknown_calls": 1
+          },
+          "cost_usd": 0.001,
+          "pending_admission_usd": 0.0,
+          "unmetered_calls": 0
+        }
+      }
+    ]
+  },
+  "notes": [
+    "Lifecycle status describes execution, not scientific truth. Persisted metadata is a record, not proof evidence.",
+    "Quarantined model artifacts are not assumptions. Sourced means identifiable provenance, never theorem verification.",
+    "A surviving candidate or bypass passed only a bounded attack; no proof verification is implied.",
+    "Receipt/review uncertainty is unreconciled history; model output is not necessarily an accepted graph artifact.",
+    "Token tallies are known subtotals; unknown_calls distinguishes missing telemetry from zero. Costs are recorded estimates."
+  ]
+}

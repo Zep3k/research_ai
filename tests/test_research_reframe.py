@@ -195,7 +195,7 @@ def test_exact_contract_and_obligation_statement_are_pure_untruncated(wa, monkey
     assert {entity.entity_type for entity in state.problem_contract} == {"ResearchIdea", "Definition", "Model", "Assumption"}
     assert next(entity.body for entity in state.problem_contract if entity.id == contract) == CONTRACT
     assert next(entity.body for entity in state.problem_contract if entity.entity_type == "Model") == "Exact Model body\n" * 200
-    assert state.open_obligations[0].statement == statement
+    assert state.open_obligations[0].statement == statement + "\n\nReasoning: old derivation"
     assert ProblemContractBrief.model_config["frozen"]
     assert primary_id in {entity.id for entity in state.problem_contract}
 
@@ -475,8 +475,10 @@ def test_cli_displays_reframe_audit_without_extra_calls(wa, monkeypatch):
     result = CliRunner().invoke(app, ["research", str(workstream), "--max-calls", "1"])
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
-    assert "necessity audit: required_on_current_routes" in output and "research:reframe" in output
-    assert "progress: validation / obligation_audited" in output
+    assert "Proof obligations" in output
+    assert "required_on_current_routes" in output.replace(" ", "")
+    assert "Latest material progress:" in output
+    assert "validation / obligation_audited" in output
     assert len(requests) == 2
 
 

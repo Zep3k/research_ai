@@ -15,6 +15,7 @@ from theory.graph import (
     set_attribute,
 )
 from theory.models import ModelResult
+from theory.prompts import render_prompt
 from theory.research import (
     OperationChoice,
     RESEARCH_MAX_OUTPUT_TOKENS,
@@ -89,6 +90,7 @@ class DynamicProvider:
         self.calls = []
 
     def complete(self, **kwargs):
+        kwargs["prompt"] = render_prompt(kwargs["prompt"])
         self.calls.append(kwargs)
         response = self.responder(decision_from_prompt(kwargs["prompt"]), len(self.calls))
         return ModelResult(
@@ -106,6 +108,7 @@ class RaisingProvider:
         self.calls = 0
 
     def complete(self, **kwargs):
+        kwargs["prompt"] = render_prompt(kwargs["prompt"])
         self.calls += 1
         raise TimeoutError("mock controller timeout")
 
@@ -2440,6 +2443,7 @@ def test_incomplete_openai_response_is_not_parsed_and_retains_usage(
             self.calls = []
 
         def complete(self, **kwargs):
+            kwargs["prompt"] = render_prompt(kwargs["prompt"])
             self.calls.append(kwargs)
             return ModelResult(
                 text='{"operation": "develop", "summary": "cut off',
@@ -2613,8 +2617,8 @@ def test_research_cli_and_workstream_show_make_no_extra_call(monkeypatch, tmp_pa
     assert "Research controller stopped" in result.output
     assert "max_calls_exhausted" in result.output
     assert "iteration 1: develop" in result.output
-    assert "why:" in result.output
-    assert "research:develop" in result.output
+    assert "Proof obligations" in result.output
+    assert "Execution accounting" in result.output
     assert len(provider.calls) == 1
 
     shown = runner.invoke(app, ["workstream", "show", str(workstream)])

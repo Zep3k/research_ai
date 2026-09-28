@@ -8,13 +8,17 @@ from .config import Config
 from .db import CALL_TELEMETRY_COLUMNS, connect, monthly_spend, utcnow
 from .errors import BudgetExceededError, ModelOutputError, TheoryError
 from .models import ModelResult
+from .prompts import Prompt, render_prompt
 from .providers import conservative_call_cost
 
 
 def budget_guard(
-    cfg: Config, *, model: str, prompt: str, max_output_tokens: int, purpose: str
+    cfg: Config, *, model: str, prompt: Prompt, max_output_tokens: int, purpose: str,
+    response_model: type[BaseModel] | None = None,
 ) -> float:
-    estimated_max = conservative_call_cost(model, prompt, max_output_tokens)
+    estimated_max = conservative_call_cost(
+        model, prompt, max_output_tokens, response_model=response_model,
+    )
     spent = monthly_spend()
     projected = spent + estimated_max
     if projected > cfg.monthly_budget_usd:
@@ -98,7 +102,7 @@ def call_model(
     provider_name: str,
     model: str,
     purpose: str,
-    prompt: str,
+    prompt: Prompt,
     max_output_tokens: int,
     estimated_max_cost_usd: float,
     response_model: type[BaseModel] | None = None,
@@ -112,7 +116,7 @@ def call_model(
         model=model,
         purpose=purpose,
         estimated_max_cost_usd=estimated_max_cost_usd,
-        prompt_utf8_bytes=len(prompt.encode("utf-8")),
+        prompt_utf8_bytes=len(render_prompt(prompt).encode("utf-8")),
     )
     try:
         result = provider.complete(

@@ -265,7 +265,8 @@ def test_openai_only_run_never_constructs_anthropic(monkeypatch, tmp_path):
         return provider
 
     monkeypatch.setattr("theory.research.get_provider", factory)
-    assert research(workstream, max_calls=4).calls_made == 4
+    # Exercise execution routing alone; generated findings now admit strategic synthesis.
+    assert research(workstream, max_calls=4, strategy="off").calls_made == 4
     assert initialized == ["openai"]
 
 
@@ -340,7 +341,8 @@ def test_auto_invalid_output_is_a_single_paid_attempt_with_no_escalation(monkeyp
         attack_outcome="no_critical_issue", unresolved=["Material uncertainty"]))
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
     with pytest.raises(ModelOutputError, match="no_critical_issue cannot accompany"):
-        research(workstream, max_calls=8)
+        # Isolate automatic execution routing from the competing root-develop move.
+        research(workstream, max_calls=8, strategy="off")
     assert len(provider.calls) == 1
     with connect() as con:
         assert con.execute("SELECT COUNT(*) FROM api_calls").fetchone()[0] == 1

@@ -30,6 +30,8 @@ from .papers import import_pdf
 from .paths import STATE_DIR, PAPERS_DIR, require_workspace
 from .research import MAX_CONTROLLER_CALLS, research as run_research
 from .research_progress import progress_event_kinds
+from .research_report import build_research_report
+from .research_report_ui import render_research_report
 from .trust import EntityType, parse_enum
 from .workflows import investigate as run_investigation
 
@@ -205,6 +207,19 @@ def develop_command(
     workstream_show(workstream_id)
 
 
+@app.command("research-report")
+def research_report_command(
+    workstream_id: int,
+    as_json: bool = typer.Option(False, "--json", help="Emit the shared immutable report contract."),
+):
+    """Read persisted research state without model calls, writes, or migrations."""
+    report = build_research_report(workstream_id)
+    if as_json:
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        render_research_report(report, console)
+
+
 @app.command("research")
 def research_command(
     workstream_id: int,
@@ -240,7 +255,7 @@ def research_command(
         f"{len(outcome.artifact_ids)} artifact(s), "
         f"status {escape(outcome.final_status)}."
     )
-    workstream_show(workstream_id)
+    render_research_report(build_research_report(workstream_id), console)
 
 
 def _show_run(run_id: int):

@@ -15,6 +15,7 @@ from theory.errors import BudgetExceededError, ConfigurationError, ModelOutputEr
 from theory.graph import set_attribute
 from theory.model_calls import budget_guard
 from theory.models import ModelResult
+from theory.prompts import render_prompt
 from theory.research import (
     LegalResearchMove, OperationChoice, ResearchStepReport, StrategistDecision,
     STRATEGIST_MAX_OUTPUT_TOKENS, _strategist_prompt, build_research_state,
@@ -77,6 +78,7 @@ class StrategyProvider:
         self.executions = 0
 
     def complete(self, **kwargs):
+        kwargs["prompt"] = render_prompt(kwargs["prompt"])
         self.requests.append((self.name, kwargs))
         if kwargs["response_model"] is StrategistDecision:
             # Planning must never create a running iteration.
@@ -134,10 +136,10 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     assert len(outcome.iteration_ids) == 1
     assert constructed == ["openai", "anthropic"]
     assert [(name, request["model"], request["effort"], request["max_output_tokens"]) for name, request in requests] == [
-        ("openai", "gpt-6-luna", "medium", 1500),
+        ("openai", "gpt-6-luna", "medium", 4000),
         ("anthropic", "claude-opus-5-5", "medium", 12000),
     ]
-    assert STRATEGIST_MAX_OUTPUT_TOKENS == 1500
+    assert STRATEGIST_MAX_OUTPUT_TOKENS == 4000
     execution = decision_from_prompt(requests[1][1]["prompt"])
     assert execution["operation"] == "attack" and execution["target_entity_id"] == proof
     assert [admission["purpose"] for admission in admissions] == ["research:strategy", "research:attack"]
@@ -314,15 +316,91 @@ def test_newest_proof_only_and_leaf_frontier(historical):
     assert old_proof not in {move.target_entity_id for move in moves}
 
 
-def test_no_obligations_exposes_only_concrete_unattacked_proofs(monkeypatch, tmp_path):
+def test_no_obligations_preserves_alternative_attacks_with_root_develop(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, primary = make_research_workstream()
     proofs = [add_linked_research_entity(workstream, "ProofAttempt", f"Candidate {n}") for n in range(3)]
     history = (completed_history("attack", proofs[0]),)
-    _, _, moves, _ = load_moves(workstream, primary, history)
+    context, primary_entity, moves, _ = load_moves(workstream, primary, history)
     assert [(move.operation, move.target_entity_id, move.focus_obligation_id) for move in moves] == [
         ("attack", proofs[2], None), ("attack", proofs[1], None),
+        ("develop", primary, None),
     ]
+    assert generate_legal_research_moves(
+        context, workstream, primary_entity, history, strategy_enabled=False,
+    ) == moves[:-1]
+
+
+@pytest.mark.parametrize("entity_type,operation", [("Lemma", "prove"), ("ProofAttempt", "attack")])
+def test_no_obligations_strategist_can_develop_past_auxiliary_candidate(
+    monkeypatch, tmp_path, entity_type, operation,
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, primary_id = make_research_workstream(title="Construct a weak agreement protocol")
+    candidate = add_linked_research_entity(workstream, entity_type, "Auxiliary certificate counting bound")
+    context, primary, moves, baseline = load_moves(workstream, primary_id)
+    assert baseline.operation == operation and baseline.target_entity_id == candidate
+    assert baseline.open_obligation_ids == ()
+    root_id = f"develop:{primary_id}:none:none"
+    assert [move.move_id for move in moves] == [f"{operation}:{candidate}:none:none", root_id]
+    assert moves[0] == LegalResearchMove.from_choice(baseline)
+    assert moves[1].to_operation_choice() == OperationChoice(
+        "develop", primary_id,
+        "Explore another top-level route from the supplied problem contract "
+        "instead of committing immediately to the current local candidate.",
+    )
+    before_entity = next(entity for entity in context.entities if entity["id"] == candidate)
+    before_attributes = copy.deepcopy(context.attributes.get(candidate, {}))
+    requests, _ = install_providers(
+        monkeypatch,
+        select=lambda _: {"selected_move_id": root_id, "rationale": "The counting lemma is auxiliary to the main construction."},
+        execute=lambda decision, _: step_report(decision, [artifact(
+            "protocol_component", "Expose certificate conflicts and abstain on visible conflict.",
+            "visible_conflict_protocol", [primary_id],
+        )]),
+    )
+    outcome = research(workstream, max_calls=1)
+    assert (outcome.calls_made, outcome.strategy_calls_made, outcome.total_api_calls_made) == (1, 1, 2)
+    assert outcome.stop_reason == "max_calls_exhausted"
+    assert len(outcome.artifact_ids) == 1
+    assert "Compare proving/attacking it against" in requests[0][1]["prompt"]
+    execution = requests[1][1]
+    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-luna", "high", 12_000)
+    assert decision_from_prompt(execution["prompt"])["target_entity_id"] == primary_id
+    assert "Do not assume the current open obligations are necessary." not in execution["prompt"]
+    after = for_workstream(workstream)
+    assert next(entity for entity in after.entities if entity["id"] == candidate) == before_entity
+    assert after.attributes.get(candidate, {}) == before_attributes
+    assert after.attributes[outcome.artifact_ids[0]]["research_artifact_type"] == "protocol_component"
+    assert choose_next_operation(after, workstream, primary, ()).target_entity_id == candidate
+
+
+@pytest.mark.parametrize("entity_type,operation", [("Lemma", "prove"), ("ProofAttempt", "attack")])
+@pytest.mark.parametrize("provider,strategy", [("auto", "off"), ("openai", "auto"), ("anthropic", "auto")])
+def test_no_obligations_ablations_keep_local_candidate(
+    monkeypatch, tmp_path, entity_type, operation, provider, strategy,
+):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, primary_id = make_research_workstream()
+    candidate = add_linked_research_entity(workstream, entity_type, "Auxiliary bound")
+    context, primary, _, baseline = load_moves(workstream, primary_id)
+    assert generate_legal_research_moves(
+        context, workstream, primary, (), strategy_enabled=False,
+    ) == (LegalResearchMove.from_choice(baseline),)
+    requests, _ = install_providers(monkeypatch, execute=lambda decision, _: step_report(
+        decision, [] if operation == "attack" else [artifact(
+            "proof_attempt", "A conditional proof of the auxiliary bound.", "auxiliary_proof", [candidate],
+        )], attack_outcome="inconclusive" if operation == "attack" else "not_applicable",
+        unresolved=["Boundary case is still uncertain."] if operation == "attack" else [],
+    ))
+    outcome = research(workstream, provider, strategy=strategy, max_calls=1)
+    assert (outcome.calls_made, outcome.strategy_calls_made, len(requests)) == (1, 0, 1)
+    decision = decision_from_prompt(requests[0][1]["prompt"])
+    assert (decision["operation"], decision["target_entity_id"]) == (operation, candidate)
+    with connect() as con:
+        row = con.execute("SELECT * FROM research_iterations").fetchone()
+    assert row["selection_mode"] == "deterministic_baseline"
+    assert json.loads(row["legal_move_ids_json"]) == [LegalResearchMove.from_choice(baseline).move_id]
 
 
 def test_terminal_baseline_disagreement_fails_closed_without_changing_scheduler(monkeypatch, tmp_path):
@@ -393,7 +471,8 @@ def test_call_bounds_and_openai_provider_reuse(monkeypatch, tmp_path, multiple):
     )]))
     outcome = research(workstream, max_calls=3)
     assert outcome.calls_made == 3
-    assert outcome.strategy_calls_made == (3 if multiple else 0)
+    # Without obligations, the first two develop results enable primary synthesis.
+    assert outcome.strategy_calls_made == (3 if multiple else 1)
     assert outcome.total_api_calls_made == len(requests) <= 6
     assert outcome.strategy_calls_made <= outcome.calls_made <= 3
     assert constructed == ["openai"]  # Strategy and execution share the same instance.
@@ -469,9 +548,9 @@ def test_cli_strategy_modes_and_call_visibility(historical, monkeypatch, args, s
     assert len(requests) == (2 if strategic else 1)
     if strategic:
         assert "1 strategist call(s)" in normalized and "2 total API call(s)" in normalized
-        assert "research:strategy" in normalized
+        assert "Calls: 1 strategy / 1 execution" in normalized
     else:
-        assert "research:strategy" not in normalized
+        assert "Calls: 0 strategy / 1 execution" in normalized
 
 
 def test_local_precedence_across_simultaneous_candidates(historical):
@@ -557,7 +636,7 @@ def test_strategy_execution_duplicates_still_use_full_context(historical, monkey
 
 def test_strategy_cost_is_spent_before_execution_budget_admission(historical, monkeypatch):
     workstream, *_ = historical
-    Config(monthly_budget_usd=0.002).save()  # Admits Luna strategy, not the Opus execution cap.
+    Config(monthly_budget_usd=0.004).save()  # Admits Luna strategy, not the Opus execution cap.
     requests, _ = install_providers(monkeypatch)
     with pytest.raises(BudgetExceededError, match="research:attack"):
         research(workstream, max_calls=1)

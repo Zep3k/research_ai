@@ -1,0 +1,103 @@
+╭─────────────────────────────────────────────── Research #1 ────────────────────────────────────────────────╮
+│ Find a weak-agreement construction                                                                         │
+│ Research object: Weak agreement under partial synchrony                                                    │
+│ Lifecycle: active  |  Stop: not recorded                                                                   │
+│ Frontier: 1 open obligations · 1 active candidates · 1 closed branches                                     │
+│ Independent candidate attacks are pending.                                                                 │
+│ Calls: 1 strategy / 2 execution / 0 other  |  Recorded cost: $0.002000                                     │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+Execution status is not scientific truth. Sourced ≠ verified; bounded attacks are not proof verification.
+Proof obligations                                                                                             
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Object                                               ┃ Recorded state               ┃ Candidates / route   ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━┩
+│ #2 Rule out conflicting certificates                 │ bypassed; audit: bypassed    │ attempts: —          │
+│ #3 Bound the fallback disagreement probability       │ candidate_pending_attack     │ attempts: #4         │
+└──────────────────────────────────────────────────────┴──────────────────────────────┴──────────────────────┘
+Reframes and reversible bypasses                                                                              
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Obligation         ┃ Route      ┃ Replacement premises              ┃ Recorded graph                       ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ #2                 │ #5         │ #3                                │ surviving bounded route              │
+└────────────────────┴────────────┴───────────────────────────────────┴──────────────────────────────────────┘
+Active candidates — provisional                                                                               
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Object                                ┃ Attempts   ┃ Trust / bounded attack                                ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ #4 A conditional fallback bound       │ #3         │ quarantined model artifact; attack not recorded       │
+└───────────────────────────────────────┴────────────┴───────────────────────────────────────────────────────┘
+Blocked / failed / refuted branches                                                                           
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Object                                                 ┃ Recorded state    ┃ Trust                         ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ #6 Identical certificates fail at the boundary         │ refuted           │ quarantined model artifact    │
+└────────────────────────────────────────────────────────┴───────────────────┴───────────────────────────────┘
+Latest material progress: iteration 3: prove — construction / candidate_created; artifacts #4
+Recent iterations (newest first)                                                                              
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Operation                 ┃ Result    ┃ Progress / evidence                                                ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ iteration 3: prove → #4   │ completed │ construction / candidate_created                                   │
+│ iteration 2: attack → #5  │ completed │ validation / obligation_bypassed; bounded attack:                  │
+│                           │           │ no_critical_issue                                                  │
+│ iteration 1: reframe → #2 │ completed │ validation / obligation_audited                                    │
+└───────────────────────────┴───────────┴────────────────────────────────────────────────────────────────────┘
+Recorded uncertainty / human judgment                                                                         
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Origin                           ┃ Scope                   ┃ Item                                          ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ graph #3: open_question          │ recorded unreconciled   │ Bound the fallback disagreement probability   │
+│ api_call #2: model_uncertainty   │ recorded unreconciled   │ The boundary case remains undecided.          │
+└──────────────────────────────────┴─────────────────────────┴───────────────────────────────────────────────┘
+Recorded reviews — not verification                                                                           
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Review                    ┃ Result        ┃ Issues                                                         ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ #1 counterexample_attempt │ no_flaw_found │ A bounded pass found no critical issue; replacement premise    │
+│                           │               │ remains open.                                                  │
+└───────────────────────────┴───────────────┴────────────────────────────────────────────────────────────────┘
+Scientific artifacts by role                                                                                  
+┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Role              ┃ Object            ┃ Scientific content                   ┃ Trust                       ┃
+┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ problem contract  │ #1 ResearchIdea   │ Weak agreement under partial         │ unverified                  │
+│                   │                   │ synchrony                            │                             │
+│ proof candidates  │ #4 Lemma          │ A conditional fallback bound         │ quarantined model artifact  │
+│ findings          │ #5 Finding        │ A fallback route bypasses            │ quarantined model artifact  │
+│                   │                   │ certificate uniqueness               │                             │
+│ proof obligations │ #2 OpenQuestion   │ Rule out conflicting certificates    │ quarantined model artifact  │
+│                   │ #3 OpenQuestion   │ Bound the fallback disagreement      │ quarantined model artifact  │
+│                   │                   │ probability                          │                             │
+│ negative results  │ #6 FailedApproach │ Identical certificates fail at the   │ quarantined model artifact  │
+│                   │                   │ boundary                             │                             │
+│ source material   │ #7 Paper          │ A source on weak agreement           │ unverified                  │
+│                   │ #8 Lemma          │ Source-backed conditional lemma      │ source-backed; not verified │
+└───────────────────┴───────────────────┴──────────────────────────────────────┴─────────────────────────────┘
+Source provenance                                                                                             
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Object / source           ┃ Origin                                     ┃ Locator                           ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ #4 / source #2            │ note; origin missing                       │ Unidentified appendix             │
+│ #7 / source #1            │ A source on weak agreement                 │ page 7; 3.2; Lemma 4              │
+│ #8 / source #1            │ A source on weak agreement                 │ page 7; 3.2; Lemma 4              │
+└───────────────────────────┴────────────────────────────────────────────┴───────────────────────────────────┘
+Execution accounting                                                                                          
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Provider / model            ┃ Calls ┃ Input / output ┃ Cache read / write                  ┃ Recorded cost ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ anthropic / claude-sonnet-5 │ 1     │ 0 / 0          │ 0 + unknown (1 calls) / 0 + unknown │ $0.000000     │
+│                             │       │                │ (1 calls)                           │               │
+│ openai / gpt-6-luna         │ 1     │ 1,000 / 100    │ 600 / 300                           │ $0.001000     │
+│ openai / gpt-6-sol          │ 1     │ 1,000 / 100    │ 600 / 300                           │ $0.001000     │
+└─────────────────────────────┴───────┴────────────────┴─────────────────────────────────────┴───────────────┘
+Receipts: 2 completed, 1 failed, 0 pending; 1 unmetered. Cache writes: 5m 600 + unknown (1 calls); 1h 0 + 
+unknown (1 calls). Pending admission: $0.000000.
+Lifecycle status describes execution, not scientific truth. Persisted metadata is a record, not proof 
+evidence.
+Quarantined model artifacts are not assumptions. Sourced means identifiable provenance, never theorem 
+verification.
+A surviving candidate or bypass passed only a bounded attack; no proof verification is implied.
+Receipt/review uncertainty is unreconciled history; model output is not necessarily an accepted graph 
+artifact.
+Token tallies are known subtotals; unknown_calls distinguishes missing telemetry from zero. Costs are recorded
+estimates.

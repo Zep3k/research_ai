@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "workstream_id": 3,
+  "goal": "New unscheduled research goal",
+  "primary_goal_ids": [],
+  "lifecycle_status": "active",
+  "summary": "",
+  "stop_reason": null,
+  "stop_reason_source": null,
+  "last_recorded_stop_reason": null,
+  "frontier": {
+    "description": "No open proof obligations or active candidates are recorded.",
+    "open_obligation_ids": [],
+    "pending_attack_ids": [],
+    "candidate_ids": [],
+    "blocked_branch_ids": []
+  },
+  "entities": [],
+  "obligations": [],
+  "artifact_groups": [],
+  "latest_material_progress": null,
+  "recent_iterations": [],
+  "iteration_count": 0,
+  "reviews": [],
+  "unresolved_items": [],
+  "execution": {
+    "strategy_calls": 0,
+    "execution_calls": 0,
+    "other_calls": 0,
+    "total": {
+      "calls": 0,
+      "completed_calls": 0,
+      "failed_calls": 0,
+      "pending_calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cache_read": {
+        "known_tokens": 0,
+        "unknown_calls": 0
+      },
+      "cache_write": {
+        "known_tokens": 0,
+        "unknown_calls": 0
+      },
+      "cache_write_5m": {
+        "known_tokens": 0,
+        "unknown_calls": 0
+      },
+      "cache_write_1h": {
+        "known_tokens": 0,
+        "unknown_calls": 0
+      },
+      "reasoning": {
+        "known_tokens": 0,
+        "unknown_calls": 0
+      },
+      "cost_usd": 0.0,
+      "pending_admission_usd": 0.0,
+      "unmetered_calls": 0
+    },
+    "models": []
+  },
+  "notes": [
+    "Lifecycle status describes execution, not scientific truth. Persisted metadata is a record, not proof evidence.",
+    "Quarantined model artifacts are not assumptions. Sourced means identifiable provenance, never theorem verification.",
+    "A surviving candidate or bypass passed only a bounded attack; no proof verification is implied.",
+    "Receipt/review uncertainty is unreconciled history; model output is not necessarily an accepted graph artifact.",
+    "Token tallies are known subtotals; unknown_calls distinguishes missing telemetry from zero. Costs are recorded estimates.",
+    "No unique primary goal input is recorded; use the workstream goal and inspect its contract inputs."
+  ]
+}

@@ -198,12 +198,15 @@ def test_no_usage_failure_preserves_unknown_details(monkeypatch, tmp_path):
     assert monthly_spend() == 0
 
 
-def test_budget_admission_assumes_uncached_input(monkeypatch, tmp_path):
+def test_budget_admission_covers_cold_cache_writes(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     prompt = "α" * 100
     maximum = budget_guard(Config(), model="gpt-6-luna", prompt=prompt,
                            max_output_tokens=1000, purpose="test")
-    assert maximum == estimate_cost("gpt-6-luna", 200, 1000)
+    assert maximum == estimate_usage_cost(
+        "gpt-6-luna", uncached_input_tokens=0, cache_write_5m_input_tokens=200,
+        output_tokens=1000,
+    ).cost_usd
     cached = estimate_usage_cost("gpt-6-luna", uncached_input_tokens=0,
                                 cache_read_input_tokens=200, output_tokens=1000)
     assert maximum > cached.cost_usd

@@ -1,11 +1,13 @@
 from __future__ import annotations
 import os
+import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from dotenv import load_dotenv
 from pydantic import BaseModel
 from .errors import ConfigurationError, TelemetryError
 from .models import ModelResult
+from .prompts import Prompt, PromptContent, render_prompt
 
 load_dotenv()
 
@@ -150,16 +152,63 @@ def _normalized_usage(model: str, usage, *, provider: str) -> dict:
     )
 
 
-def conservative_call_cost(model: str, prompt: str, max_output_tokens: int) -> float:
-    """Upper-bound a normal text call locally for budget admission.
+def _response_format(provider: str, response_model: type[BaseModel]) -> dict:
+    if provider == "openai":
+        from openai.lib._parsing._responses import type_to_text_format_param
 
-    UTF-8 bytes are used as a deliberately conservative input-token bound. The
-    provider-side output cap supplies the output-token bound.
+        return type_to_text_format_param(response_model)
+    if provider == "anthropic":
+        from anthropic import transform_schema
+
+        # Use the SDK's supported schema subset, then validate the full
+        # Pydantic contract locally after usage has been recorded.
+        # The SDK moves `const` to a description; preserve single-literal
+        # artifact tags as supported one-value enums before conversion.
+        schema = response_model.model_json_schema()
+
+        def normalize_literals(node):
+            if isinstance(node, dict):
+                if "const" in node:
+                    node["enum"] = [node.pop("const")]
+                for value in node.values():
+                    normalize_literals(value)
+            elif isinstance(node, list):
+                for value in node:
+                    normalize_literals(value)
+
+        normalize_literals(schema)
+        return {
+            "type": "json_schema",
+            "schema": transform_schema(schema),
+        }
+    raise ConfigurationError(f"Unknown provider: {provider}")
+
+
+def conservative_call_cost(
+    model: str, prompt: Prompt, max_output_tokens: int,
+    *, response_model: type[BaseModel] | None = None,
+) -> float:
+    """Local admission estimate assuming no cache hit and possible cache writes.
+
+    Bound visible text/schema tokens by UTF-8 bytes, plus framing headroom for
+    structured requests. Charge the whole bound at the highest applicable input
+    rate: cache eligibility/hits are unknown until the response. No 1h cache or
+    server tools are requested by these adapters. Actual receipts use usage only.
     """
     if max_output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive")
-    input_token_bound = max(1, len(prompt.encode("utf-8")))
-    return estimate_cost(model, input_token_bound, max_output_tokens)
+    spec = get_model_spec(model)
+    input_token_bound = max(1, len(render_prompt(prompt).encode("utf-8")))
+    if response_model is not None:
+        schema = _response_format(spec.provider, response_model)
+        input_token_bound += len(json.dumps(schema, ensure_ascii=False).encode("utf-8"))
+    if isinstance(prompt, PromptContent) or response_model is not None:
+        input_token_bound += 1024  # Message/block framing and provider format instructions.
+    input_rate = max(spec.input_usd_per_million, spec.cache_read_usd_per_million)
+    if spec.provider == "openai" or (isinstance(prompt, PromptContent) and prompt.stable_prefix):
+        input_rate = max(input_rate, spec.cache_write_5m_usd_per_million)
+    return (input_token_bound * input_rate
+            + max_output_tokens * spec.output_usd_per_million) / 1_000_000
 
 
 class Provider(ABC):
@@ -170,7 +219,7 @@ class Provider(ABC):
         self,
         *,
         model: str,
-        prompt: str,
+        prompt: Prompt,
         effort: str = "high",
         max_output_tokens: int,
         response_model: type[BaseModel] | None = None,
@@ -191,22 +240,22 @@ class OpenAIProvider(Provider):
         self,
         *,
         model: str,
-        prompt: str,
+        prompt: Prompt,
         effort: str = "high",
         max_output_tokens: int,
         response_model: type[BaseModel] | None = None,
     ) -> ModelResult:
         get_model_spec(model, self.name)
+        # Preserve roles and byte-identical stable-first text. OpenAI manages
+        # automatic prefix caching; no manual cache controls or warm-up calls.
         request = {
             "model": model,
-            "input": prompt,
+            "input": render_prompt(prompt),
             "reasoning": {"effort": effort},
             "max_output_tokens": max_output_tokens,
         }
         if response_model is not None:
-            from openai.lib._parsing._responses import type_to_text_format_param
-
-            request["text"] = {"format": type_to_text_format_param(response_model)}
+            request["text"] = {"format": _response_format(self.name, response_model)}
         response = self.client.responses.create(
             **request,
         )
@@ -235,7 +284,7 @@ class AnthropicProvider(Provider):
         self,
         *,
         model: str,
-        prompt: str,
+        prompt: Prompt,
         effort: str = "high",
         max_output_tokens: int,
         response_model: type[BaseModel] | None = None,
@@ -243,34 +292,22 @@ class AnthropicProvider(Provider):
         get_model_spec(model, self.name)
         output_config = {"effort": effort}
         if response_model is not None:
-            from anthropic import transform_schema
-
-            # Use the SDK's supported schema subset, then validate the full
-            # Pydantic contract locally after usage has been recorded.
-            # The SDK moves `const` to a description; preserve single-literal
-            # artifact tags as supported one-value enums before conversion.
-            schema = response_model.model_json_schema()
-
-            def normalize_literals(node):
-                if isinstance(node, dict):
-                    if "const" in node:
-                        node["enum"] = [node.pop("const")]
-                    for value in node.values():
-                        normalize_literals(value)
-                elif isinstance(node, list):
-                    for value in node:
-                        normalize_literals(value)
-
-            normalize_literals(schema)
-            output_config["format"] = {
-                "type": "json_schema",
-                "schema": transform_schema(schema),
-            }
+            output_config["format"] = _response_format(self.name, response_model)
+        content = render_prompt(prompt)
+        if isinstance(prompt, PromptContent) and prompt.stable_prefix:
+            # Keep both sections in the original user message; only the stable
+            # prefix is eligible for this explicit five-minute cache write.
+            content = [{
+                "type": "text", "text": prompt.stable_prefix,
+                "cache_control": {"type": "ephemeral", "ttl": "5m"},
+            }]
+            if prompt.dynamic_suffix:
+                content.append({"type": "text", "text": prompt.dynamic_suffix})
         message = self.client.messages.create(
             model=model,
             max_tokens=max_output_tokens,
             output_config=output_config,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": content}],
         )
         text = "\n".join(
             block.text for block in message.content if getattr(block, "type", None) == "text"
