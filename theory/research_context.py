@@ -103,7 +103,7 @@ def focus_research_context(
     focus_obligation_id: int | None = None,
     consumed_entity_ids: tuple[int, ...] = (),
 ) -> ResearchContext:
-    """Pure, one-hop execution view; omitted entities have not been judged irrelevant."""
+    """Pure local view plus recorded dependency ancestry; omission is not a judgment."""
     anchors = {target_entity_id, *consumed_entity_ids}
     if focus_obligation_id is not None:
         anchors.add(focus_obligation_id)
@@ -125,6 +125,7 @@ def focus_research_context(
         if endpoints & anchors:
             included.update(endpoints)
 
+    references_by_id: dict[int, set[int]] = {}
     for entity_id, attrs in full_context.attributes.items():
         references: set[int] = set()
         for key in ("related_entity_ids", "addresses_obligation_ids", "research_related_obligation_ids"):
@@ -138,10 +139,34 @@ def focus_research_context(
             references.add(int(attrs["research_focus_obligation_id"]))
         except (KeyError, TypeError, ValueError):
             pass
+        references_by_id[entity_id] = references
         if entity_id in anchors:
             included.update(references)
         if references & anchors:
             included.add(entity_id)
+
+    # Follow explicit forward references of selected components, including their
+    # recorded ancestors. Do not recursively expand reverse neighbors or traverse
+    # contract inputs into unrelated branches. Finite visited sets handle cycles.
+    inputs = {primary_entity_id} | {
+        int(link["entity_id"]) for link in full_context.workstream_links
+        if int(link["workstream_id"]) == workstream_id and link["role"] == "input"
+    }
+    for relation in active_relations:
+        if relation["relation_type"] in {"DEPENDS_ON", "USES"}:
+            references_by_id.setdefault(int(relation["source_entity_id"]), set()).add(
+                int(relation["target_entity_id"])
+            )
+    pending = sorted(anchors - inputs)
+    visited: set[int] = set()
+    while pending:
+        entity_id = pending.pop()
+        if entity_id in visited or entity_id not in available:
+            continue
+        visited.add(entity_id)
+        dependencies = references_by_id.get(entity_id, set()) & available
+        included.update(dependencies)
+        pending.extend(sorted(dependencies - visited - inputs))
 
     included &= available
     entities = tuple(entity for entity in full_context.entities if int(entity["id"]) in included)

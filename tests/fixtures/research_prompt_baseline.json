@@ -1,21 +1,21 @@
 {
   "develop": {
-    "words": "f302a2c36bdfa0a987ce42d08a9b6a89573469bdc658bf25673ecb9f81f2e781",
+    "words": "a0a66a0cddafefe0fad0b663a8cbe747dcbda368af1dbfd277af082c0d53c80b",
     "decision_and_graph": "bb9bc6816341302363c70ea5de708cf4de7af732e44f897f8f4a0e67e4900725",
     "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
   },
   "focused_develop": {
-    "words": "b7ef83b9597e061fa090b4c8678fcaed01c206b859b7ee6dd608068bac2509e1",
+    "words": "eec5e22051709c80b66c69d385a7deb12a3a4292ca642693112173a991d50b44",
     "decision_and_graph": "8e2e78528c0a5d5fb1c4f9b89773fce25a1f4e55ec3630b0293abf7eda841c1a",
     "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
   },
   "escape_develop": {
-    "words": "15422e9dab212a4d334d9bb9ac01f2333c51d6bbab95c45679363b68ab3d588b",
+    "words": "40641910ce277118b67f7c7d76d0b4cda4d407b228fd61233fc9697d655d709e",
     "decision_and_graph": "9700e9ddd24f4e8a4329582292d59b6d25bcd82f2c19f629c4adcabc7e49a509",
     "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
   },
   "contract_develop": {
-    "words": "198fc2cd5fb8f14fd69b08c60bd30444b6b4118f44cf642a5436e9a6ee7080e3",
+    "words": "a1e72cd1cb0f1fd8b376a0feaa832999836d4215bd09d585d3fd6d9f02775362",
     "decision_and_graph": "bb9bc6816341302363c70ea5de708cf4de7af732e44f897f8f4a0e67e4900725",
     "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
   },
@@ -60,6 +60,6 @@
     "example": "2bf23186778f198ab1159c79fee3ff9eaa2dde225f285394fc14f545affdfc6f"
   },
   "strategist": {
-    "words": "3acf78ab338de8848f782bad69823f73c0096f8c085ad8af65ededb658e4420a"
+    "words": "1e1db1fd58aa6af9f94e467af6e5124ab091fabc9a6bf01e478ad68d0cd51ebb"
   }
 }

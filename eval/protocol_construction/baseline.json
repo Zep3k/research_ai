@@ -1,0 +1,869 @@
+{
+  "negative_controls": [
+    {
+      "case": "direct_contract",
+      "checks": {
+        "bounded_obligations": true,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": true,
+        "key_invariant": true,
+        "no_forbidden_assumptions": false,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": true
+      },
+      "diagnostics": [],
+      "execution_calls": 1,
+      "fault": "forbidden_assumption",
+      "logged_calls": 1,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2
+          ],
+          "accepted_keys": [
+            "send_once"
+          ],
+          "branch_states": {
+            "2": "promising"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [],
+          "operation": "develop",
+          "progress_class": "frontier_expanded",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        }
+      ]
+    },
+    {
+      "case": "bounded_obligation_growth",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": false,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": false
+      },
+      "diagnostics": [
+        "call 2: expected develop; got develop; missing components ['queue_bound', 'queue_storage']",
+        "call 3: expected develop; got develop; missing components ['queue_bound', 'queue_storage']"
+      ],
+      "execution_calls": 3,
+      "fault": "obligation_fanout",
+      "logged_calls": 3,
+      "passed": false,
+      "stop_reason": "stagnation",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2,
+            3
+          ],
+          "accepted_keys": [
+            "missing_1_0",
+            "missing_1_1"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [
+            2,
+            3
+          ],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            2,
+            3
+          ],
+          "operation": "develop",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        },
+        {
+          "accepted_artifacts": [],
+          "accepted_keys": [],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 2,
+          "duplicate_keys": [
+            "missing_2_0",
+            "missing_2_1"
+          ],
+          "focused_context_ids": [
+            1,
+            2
+          ],
+          "generated_obligations": [],
+          "iteration": 2,
+          "legal_moves": [
+            "develop:2:2:none",
+            "develop:3:3:none",
+            "reframe:2:2:none",
+            "reframe:3:3:none"
+          ],
+          "material_progress": false,
+          "open_obligations": [
+            2,
+            3
+          ],
+          "operation": "develop",
+          "progress_class": "duplicate_only",
+          "resolution_progress": false,
+          "selected_move": "develop:2:2:none"
+        },
+        {
+          "accepted_artifacts": [],
+          "accepted_keys": [],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 2,
+          "duplicate_keys": [
+            "missing_3_0",
+            "missing_3_1"
+          ],
+          "focused_context_ids": [
+            1,
+            3
+          ],
+          "generated_obligations": [],
+          "iteration": 3,
+          "legal_moves": [
+            "develop:2:2:none",
+            "develop:3:3:none",
+            "reframe:2:2:none",
+            "reframe:3:3:none"
+          ],
+          "material_progress": false,
+          "open_obligations": [
+            2,
+            3
+          ],
+          "operation": "develop",
+          "progress_class": "duplicate_only",
+          "resolution_progress": false,
+          "selected_move": "develop:3:3:none"
+        }
+      ]
+    }
+  ],
+  "note": "Structural orchestration checks with scripted executors; no evidence of real-model intelligence or proof verification.",
+  "passed": 1,
+  "results": [
+    {
+      "case": "direct_contract",
+      "checks": {
+        "bounded_obligations": true,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": true,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": true
+      },
+      "diagnostics": [],
+      "execution_calls": 1,
+      "fault": null,
+      "logged_calls": 1,
+      "passed": true,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2
+          ],
+          "accepted_keys": [
+            "send_once"
+          ],
+          "branch_states": {
+            "2": "promising"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [],
+          "operation": "develop",
+          "progress_class": "frontier_expanded",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        }
+      ]
+    },
+    {
+      "case": "intermediate_invariant",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": true
+      },
+      "diagnostics": [
+        "call 2: expected develop; got prove; missing components []"
+      ],
+      "execution_calls": 3,
+      "fault": null,
+      "logged_calls": 3,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2
+          ],
+          "accepted_keys": [
+            "seen_memory"
+          ],
+          "branch_states": {
+            "2": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [],
+          "operation": "develop",
+          "progress_class": "frontier_expanded",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        },
+        {
+          "accepted_artifacts": [
+            3,
+            4
+          ],
+          "accepted_keys": [
+            "missing_2_0",
+            "missing_2_1"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved",
+            "4": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            2
+          ],
+          "generated_obligations": [
+            3,
+            4
+          ],
+          "iteration": 2,
+          "legal_moves": [
+            "prove:2:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            3,
+            4
+          ],
+          "operation": "prove",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "prove:2:none:none"
+        },
+        {
+          "accepted_artifacts": [
+            5
+          ],
+          "accepted_keys": [
+            "guard_handler"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved",
+            "4": "unresolved",
+            "5": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            2,
+            3
+          ],
+          "generated_obligations": [],
+          "iteration": 3,
+          "legal_moves": [
+            "develop:3:3:none",
+            "develop:4:4:none",
+            "reframe:3:3:none",
+            "reframe:4:4:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            3,
+            4
+          ],
+          "operation": "develop",
+          "progress_class": "frontier_expanded",
+          "resolution_progress": false,
+          "selected_move": "develop:3:3:none"
+        }
+      ]
+    },
+    {
+      "case": "failed_route_correction",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": false
+      },
+      "diagnostics": [
+        "call 2: expected develop; got prove; missing components ['naive_delivery_failure']"
+      ],
+      "execution_calls": 2,
+      "fault": null,
+      "logged_calls": 2,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2,
+            3
+          ],
+          "accepted_keys": [
+            "naive_delivery_failure",
+            "seen_memory"
+          ],
+          "branch_states": {
+            "2": "failed",
+            "3": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [],
+          "operation": "develop",
+          "progress_class": "branch_closed",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        },
+        {
+          "accepted_artifacts": [
+            4,
+            5
+          ],
+          "accepted_keys": [
+            "missing_2_0",
+            "missing_2_1"
+          ],
+          "branch_states": {
+            "2": "failed",
+            "3": "unresolved",
+            "4": "unresolved",
+            "5": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            3
+          ],
+          "generated_obligations": [
+            4,
+            5
+          ],
+          "iteration": 2,
+          "legal_moves": [
+            "prove:3:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            4,
+            5
+          ],
+          "operation": "prove",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "prove:3:none:none"
+        }
+      ]
+    },
+    {
+      "case": "combine_components",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": false,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": true
+      },
+      "diagnostics": [
+        "call 2: expected synthesize; got prove; missing components ['retry_sender']"
+      ],
+      "execution_calls": 2,
+      "fault": null,
+      "logged_calls": 3,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 1,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2,
+            3
+          ],
+          "accepted_keys": [
+            "retry_sender",
+            "ack_receiver"
+          ],
+          "branch_states": {
+            "2": "promising",
+            "3": "promising"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [],
+          "operation": "develop",
+          "progress_class": "frontier_expanded",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        },
+        {
+          "accepted_artifacts": [
+            4,
+            5
+          ],
+          "accepted_keys": [
+            "missing_2_0",
+            "missing_2_1"
+          ],
+          "branch_states": {
+            "2": "promising",
+            "3": "promising",
+            "4": "unresolved",
+            "5": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            3
+          ],
+          "generated_obligations": [
+            4,
+            5
+          ],
+          "iteration": 2,
+          "legal_moves": [
+            "prove:3:none:none",
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            4,
+            5
+          ],
+          "operation": "prove",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "prove:3:none:none"
+        }
+      ]
+    },
+    {
+      "case": "no_reframing_needed",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": false
+      },
+      "diagnostics": [
+        "call 2: expected develop; got prove; missing components []"
+      ],
+      "execution_calls": 2,
+      "fault": null,
+      "logged_calls": 2,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2
+          ],
+          "accepted_keys": [
+            "union_state"
+          ],
+          "branch_states": {
+            "2": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [],
+          "operation": "develop",
+          "progress_class": "frontier_expanded",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        },
+        {
+          "accepted_artifacts": [
+            3,
+            4
+          ],
+          "accepted_keys": [
+            "missing_2_0",
+            "missing_2_1"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved",
+            "4": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            2
+          ],
+          "generated_obligations": [
+            3,
+            4
+          ],
+          "iteration": 2,
+          "legal_moves": [
+            "prove:2:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            3,
+            4
+          ],
+          "operation": "prove",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "prove:2:none:none"
+        }
+      ]
+    },
+    {
+      "case": "transitive_component_context",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": true
+      },
+      "diagnostics": [
+        "call 1: expected prove; got prove; missing components ['epoch_storage']"
+      ],
+      "execution_calls": 1,
+      "fault": null,
+      "logged_calls": 1,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            5,
+            6
+          ],
+          "accepted_keys": [
+            "missing_1_0",
+            "missing_1_1"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved",
+            "4": "unresolved",
+            "5": "unresolved",
+            "6": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            3,
+            4
+          ],
+          "generated_obligations": [
+            5,
+            6
+          ],
+          "iteration": 1,
+          "legal_moves": [
+            "prove:4:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            5,
+            6
+          ],
+          "operation": "prove",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "prove:4:none:none"
+        }
+      ]
+    },
+    {
+      "case": "bounded_obligation_growth",
+      "checks": {
+        "bounded_obligations": false,
+        "components_combined": true,
+        "failed_route_preserved": true,
+        "final_candidate_structure": false,
+        "key_invariant": true,
+        "no_forbidden_assumptions": true,
+        "no_unnecessary_reframe": true,
+        "quarantine_preserved": true,
+        "required_concepts": false
+      },
+      "diagnostics": [
+        "call 2: expected develop; got develop; missing components ['queue_storage']",
+        "call 3: expected develop; got develop; missing components ['queue_storage']"
+      ],
+      "execution_calls": 3,
+      "fault": null,
+      "logged_calls": 3,
+      "passed": false,
+      "stop_reason": "max_calls_exhausted",
+      "strategy_calls": 0,
+      "trace": [
+        {
+          "accepted_artifacts": [
+            2,
+            3
+          ],
+          "accepted_keys": [
+            "queue_storage",
+            "queue_bound"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1
+          ],
+          "generated_obligations": [
+            3
+          ],
+          "iteration": 1,
+          "legal_moves": [
+            "develop:1:none:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            3
+          ],
+          "operation": "develop",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "develop:1:none:none"
+        },
+        {
+          "accepted_artifacts": [
+            4,
+            5
+          ],
+          "accepted_keys": [
+            "missing_2_0",
+            "missing_2_1"
+          ],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved",
+            "4": "unresolved",
+            "5": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 0,
+          "duplicate_keys": [],
+          "focused_context_ids": [
+            1,
+            3
+          ],
+          "generated_obligations": [
+            4,
+            5
+          ],
+          "iteration": 2,
+          "legal_moves": [
+            "develop:3:3:none",
+            "reframe:3:3:none"
+          ],
+          "material_progress": true,
+          "open_obligations": [
+            3,
+            4,
+            5
+          ],
+          "operation": "develop",
+          "progress_class": "obligation_created",
+          "resolution_progress": false,
+          "selected_move": "develop:3:3:none"
+        },
+        {
+          "accepted_artifacts": [],
+          "accepted_keys": [],
+          "branch_states": {
+            "2": "unresolved",
+            "3": "unresolved",
+            "4": "unresolved",
+            "5": "unresolved"
+          },
+          "consumed_entity_ids": [],
+          "duplicate_count": 2,
+          "duplicate_keys": [
+            "missing_3_0",
+            "missing_3_1"
+          ],
+          "focused_context_ids": [
+            1,
+            3,
+            4
+          ],
+          "generated_obligations": [],
+          "iteration": 3,
+          "legal_moves": [
+            "develop:4:4:none",
+            "develop:5:5:none",
+            "reframe:4:4:none",
+            "reframe:5:5:none"
+          ],
+          "material_progress": false,
+          "open_obligations": [
+            3,
+            4,
+            5
+          ],
+          "operation": "develop",
+          "progress_class": "duplicate_only",
+          "resolution_progress": false,
+          "selected_move": "develop:4:4:none"
+        }
+      ]
+    }
+  ],
+  "total": 7
+}

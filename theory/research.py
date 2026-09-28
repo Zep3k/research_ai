@@ -291,6 +291,7 @@ class OperationChoice:
     consumed_entity_ids: tuple[int, ...] = ()
     open_obligation_ids: tuple[int, ...] = ()
     focus_obligation_id: int | None = None
+    continue_construction: bool = False
 
 
 @dataclass(frozen=True)
@@ -301,14 +302,16 @@ class LegalResearchMove:
     consumed_entity_ids: tuple[int, ...] = ()
     open_obligation_ids: tuple[int, ...] = ()
     rationale: str = ""
+    continue_construction: bool = False
     move_id: str = field(init=False)
 
     def __post_init__(self) -> None:
         # Open obligations are shared by every move in a legal set. The operation,
-        # target, focus and exact ordered inputs distinguish moves within that set.
+        # target, focus, exact ordered inputs and construction intent distinguish moves.
         focus = self.focus_obligation_id if self.focus_obligation_id is not None else "none"
         inputs = ",".join(map(str, self.consumed_entity_ids)) or "none"
-        object.__setattr__(self, "move_id", f"{self.operation}:{self.target_entity_id}:{focus}:{inputs}")
+        suffix = ":continue" if self.continue_construction else ""
+        object.__setattr__(self, "move_id", f"{self.operation}:{self.target_entity_id}:{focus}:{inputs}{suffix}")
 
     @classmethod
     def from_choice(cls, choice: OperationChoice) -> "LegalResearchMove":
@@ -322,6 +325,7 @@ class LegalResearchMove:
             consumed_entity_ids=self.consumed_entity_ids,
             open_obligation_ids=self.open_obligation_ids,
             rationale=self.rationale,
+            continue_construction=self.continue_construction,
         )
 
 
@@ -367,6 +371,7 @@ class ResearchArtifactBrief(ResearchEntityBrief):
 
 
 class ResearchMoveBrief(PlanningBrief):
+    continue_construction: bool = False
     move_id: str
     operation: str
     target_entity_id: int
@@ -937,7 +942,8 @@ def _primary_synthesis_bundles(
             different_branch = (branch_by_id[anchor] is not None
                                 and branch_by_id[partner] is not None
                                 and branch_by_id[anchor] != branch_by_id[partner])
-            if role_by_id[anchor] == role_by_id[partner] and not different_branch:
+            if (role_by_id[anchor] == role_by_id[partner] and not different_branch
+                    and role_by_id[anchor] != "mechanism"):
                 continue
             bundle = tuple(sorted((anchor, partner)))
             if frozenset(bundle) in completed or bundle in bundles:
@@ -1226,6 +1232,54 @@ def _obligation_frontier_choice(
     )
 
 
+def _constructive_continuation(
+    context: ResearchContext, workstream_id: int, history: tuple[dict, ...],
+    open_obligations: tuple[int, ...],
+) -> OperationChoice | None:
+    """Continue only newly accepted, live, explicitly unfinished construction.
+
+    Obligation-only expansion, duplicate output, a finished candidate, or an
+    intervening operation does not earn another construction step. Existing
+    call/stagnation bounds still apply; this does not close any obligation.
+    """
+    if not history:
+        return None
+    previous = history[-1]
+    if (previous["status"] != "completed" or previous["operation"] != "develop"
+            or not previous.get("material_progress")):
+        return None
+    target = int(previous["target_entity_id"])
+    focus = previous.get("focus_obligation_id")
+    if focus is not None and focus not in open_obligations:
+        return None
+    if target not in _input_ids(context, workstream_id) and not _route_entity_is_live(context, target):
+        return None
+    accepted = _stored_id_set(previous.get("artifact_ids_json"))
+    if any(
+        _attribute(context, entity_id, "research_artifact_type") == "proof_attempt"
+        or (_attribute(context, entity_id, "research_artifact_type") == "protocol_component"
+            and _attribute(context, entity_id, "research_branch_status") == "promising")
+        for entity_id in accepted
+    ):
+        return None
+    if not any(
+        _attribute(context, entity_id, "research_artifact_type") == "protocol_component"
+        and _attribute(context, entity_id, "research_branch_status") == "unresolved"
+        and target in _stored_id_set(_attribute(context, entity_id, "related_entity_ids"))
+        and _route_entity_is_live(context, entity_id)
+        for entity_id in accepted
+    ):
+        return None
+    return OperationChoice(
+        "develop", target,
+        "Continue the same unfinished protocol route: the previous develop step accepted "
+        "a live, substantive protocol component. Extend its construction before routine "
+        "branch expansion or proof work; retain all outstanding obligations.",
+        open_obligation_ids=open_obligations, focus_obligation_id=focus,
+        continue_construction=True,
+    )
+
+
 def choose_next_operation(
     context: ResearchContext,
     workstream_id: int,
@@ -1237,6 +1291,9 @@ def choose_next_operation(
     linked = _linked_ids(context, workstream_id)
     entity_by_id = {int(entity["id"]): entity for entity in context.entities}
     open_obligations = _open_obligation_ids(context, workstream_id, primary_id)
+    continuation = _constructive_continuation(context, workstream_id, history, open_obligations)
+    if continuation is not None:
+        return continuation
     precise = [
         entity_by_id[entity_id]
         for entity_id in linked
@@ -1456,7 +1513,7 @@ def generate_legal_research_moves(
     baseline = choose_next_operation(context, workstream_id, primary, history)
     open_ids = _open_obligation_ids(context, workstream_id, int(primary["id"]))
     if open_ids:
-        choices = [
+        choices = ([baseline] if baseline.continue_construction else []) + [
             _obligation_frontier_choice(
                 context, workstream_id, history, open_ids, obligation, exclude_terminal=True
             )
@@ -1714,6 +1771,7 @@ def _research_prompt_sections(
     context: ResearchContext, primary: dict, choice: OperationChoice
 ) -> PromptSections:
     return build_research_sections(context, primary, choice, facts=ResearchPromptFacts(
+        constructive_continuation=choice.continue_construction,
         primary_synthesis=_is_primary_synthesis(context, choice),
         reframe_attack=_is_reframe_attack(context, choice),
         human_judgment_allowed=_human_judgment_allowed(context, choice),

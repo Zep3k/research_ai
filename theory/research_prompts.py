@@ -48,6 +48,7 @@ class PromptSections:
 
 @dataclass(frozen=True)
 class ResearchPromptFacts:
+    constructive_continuation: bool = False
     primary_synthesis: bool = False
     reframe_attack: bool = False
     human_judgment_allowed: bool = False
@@ -91,8 +92,14 @@ auxiliary, route-specific, or unlikely to determine the main construction;
 prefer prove/attack when testing it could materially validate or invalidate the
 current research direction.
 
+Prefer a legal construction-continuation move when the last develop step materially
+advanced an unfinished viable protocol. Do not demand a different route, attack, or new
+obligation merely because another iteration is available. A newly stated obligation
+alone does not establish construction progress; test a concrete candidate when useful.
+
 Use primary synthesis when existing branches contain complementary results whose
-combination may produce a new route or clarify the main research object. In particular,
+combination may produce a new route or clarify the main research object. Components
+from the same route or iteration can also be complementary. In particular,
 negative results can constrain a new design rather than merely terminate a branch.
 Prefer synthesis over another independent develop when the graph already contains
 materially distinct pieces that have not yet been reconciled.
@@ -194,7 +201,7 @@ def _operation_instructions(choice: OperationChoice, *, primary_synthesis: bool 
             )
         return (
             "Derive a substantive consequence, lemma, protocol component, parameter analysis, "
-            "or proof obligation. Explore a genuinely new branch. Preserve a failed branch as "
+            "or proof obligation. Extend a useful existing construction when possible. Preserve a failed branch as "
             "failed_approach or obstruction rather than hiding it."
         )
     if choice.operation == "attack":
@@ -383,9 +390,24 @@ Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
         choice, required_artifact_related_entity_ids, primary_synthesis=primary_synthesis,
     )
     develop_escape_instruction = ""
-    if (choice.operation == "develop" and choice.target_entity_id == int(primary["id"])
-            and choice.open_obligation_ids and choice.focus_obligation_id is None):
+    if choice.operation == "develop":
         develop_escape_instruction = """
+Prefer a concrete construction step: state, messages, guards/actions, or one needed invariant.
+One substantive component is enough; there is no requirement to produce multiple branches
+or new obligations on every call. Reuse existing obligation IDs/material keys for the same
+premise; introduce a new obligation only for a distinct unresolved premise. Do not hide
+missing premises or treat quarantined components as established assumptions.
+"""
+    if facts.constructive_continuation:
+        develop_escape_instruction += """
+Continue the same materially advancing protocol route. Combine or extend its recorded
+components and retain the contract and all unresolved obligations. Do not invent a new
+branch merely for novelty. This continuation does not establish correctness or resolve
+an obligation without the required proof/attack structure.
+"""
+    elif (choice.operation == "develop" and choice.target_entity_id == int(primary["id"])
+            and choice.open_obligation_ids and choice.focus_obligation_id is None):
+        develop_escape_instruction += """
 Develop a genuinely different top-level route from the exact problem contract.
 Do not assume the current open obligations are necessary.
 Do not merely refine, rename, or continue the current route.

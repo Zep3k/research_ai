@@ -25,6 +25,8 @@ CASES = (
 # primary-synthesis changes. The word fingerprints allow only these prose edits:
 # focused develop/prove and synthesis use controller references in stable text;
 # the duplicated attack-precedence summary is removed (the full rule remains).
+# Protocol-construction evaluation updates only develop/strategist prose fingerprints:
+# prefer constructive continuation and avoid mandatory branch/obligation breadth.
 # Decision/context and output-example fingerprints use the unmodified originals.
 BASELINE = json.loads(
     (Path(__file__).parent / "fixtures" / "research_prompt_baseline.json").read_text()
