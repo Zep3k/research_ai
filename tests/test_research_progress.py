@@ -100,7 +100,7 @@ def test_zero_artifact_inconclusive_attack_is_validation_and_not_stagnation(work
     workstream, _, _ = workspace
     attack_fixture(workspace)
     requests, _ = install_providers(monkeypatch)
-    outcome = research(workstream, max_calls=1)
+    outcome = research(workstream, max_calls=1, strategy="off")
     with connect() as con:
         row = dict(con.execute("SELECT * FROM research_iterations").fetchone())
     assert (row["progress_class"], row["progress_level"]) == ("candidate_tested_inconclusive", "validation")
@@ -299,7 +299,7 @@ def test_internal_classification_failure_retains_artifacts_and_retry_deduplicate
         raise TheoryError("Synthetic progress derivation failure")
     monkeypatch.setattr(controller, "build_progress_record", fail)
     with pytest.raises(TheoryError, match="Synthetic progress"):
-        research(workstream, max_calls=1)
+        research(workstream, max_calls=1, strategy="off")
     with connect() as con:
         row = dict(con.execute("SELECT * FROM research_iterations").fetchone())
         assert row["status"] == "error" and row["progress_class"] is None
@@ -309,7 +309,7 @@ def test_internal_classification_failure_retains_artifacts_and_retry_deduplicate
         original_count = con.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
         set_workstream_status(con, workstream, "active")
     monkeypatch.setattr(controller, "build_progress_record", original)
-    research(workstream, max_calls=1)
+    research(workstream, max_calls=1, strategy="off")
     with connect() as con:
         assert con.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == original_count
         assert con.execute("SELECT progress_class FROM research_iterations ORDER BY id DESC LIMIT 1").fetchone()[0] == "duplicate_only"
@@ -333,8 +333,8 @@ def test_progress_record_invariants_and_empty_result():
     with pytest.raises(ValidationError):
         empty.material_progress = True
     assert PROGRESS_PRECEDENCE == (
-        "obligation_resolved", "candidate_challenged", "branch_closed", "candidate_survived_attack",
-        "candidate_tested_inconclusive", "candidate_created", "obligation_created", "frontier_expanded",
+        "obligation_resolved", "obligation_retracted", "candidate_challenged", "branch_closed", "candidate_survived_attack",
+        "candidate_tested_inconclusive", "obligation_audited", "candidate_created", "obligation_created", "frontier_expanded",
         "duplicate_only", "no_progress",
     )
 
@@ -443,7 +443,7 @@ def test_v9_migration_is_idempotent_and_preserves_every_existing_value(monkeypat
         con.execute("PRAGMA user_version=9")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 10
+            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
             assert con.execute("SELECT name FROM schema_migrations WHERE version=10").fetchone()[0] == "research_progress_metrics"
             row = con.execute("SELECT * FROM research_iterations").fetchone()
             assert con.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -462,7 +462,7 @@ def test_cli_shows_typed_progress_and_retains_legacy_display(workspace, monkeypa
     workstream, primary, _ = workspace
     attack_fixture(workspace)
     requests, _ = install_providers(monkeypatch)
-    research(workstream, max_calls=1)
+    research(workstream, max_calls=1, strategy="off")
     with connect() as con:
         con.execute("""INSERT INTO research_iterations(
             project_id,workstream_id,iteration_number,operation,target_entity_id,rationale,status,material_progress,created_at)

@@ -180,7 +180,7 @@ def test_duplicate_detection_uses_omitted_full_context_branch(monkeypatch, tmp_p
         "finding", "A paraphrase of the existing bound.", "existing_communication_bound", [obligation],
     )]))
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
-    outcome = research(workstream, max_calls=1)
+    outcome = research(workstream, max_calls=1, strategy="off")
     assert "UNRELATED_DUPLICATE_SENTINEL" not in provider.calls[0]["prompt"]
     assert outcome.artifact_ids == ()
     with connect() as con:

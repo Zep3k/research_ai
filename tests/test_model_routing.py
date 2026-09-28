@@ -177,7 +177,7 @@ def test_selected_route_reaches_budget_provider_and_receipts(
 
     monkeypatch.setattr("theory.research.get_provider", factory)
     monkeypatch.setattr("theory.research.budget_guard", guard)
-    outcome = research(workstream, max_calls=1)
+    outcome = research(workstream, max_calls=1, strategy="off")
 
     assert outcome.calls_made == len(provider.calls) == 1
     assert initialized == [provider_name]
@@ -228,7 +228,7 @@ def test_mixed_run_lazily_caches_providers_and_records_actual_review_model(monke
         return providers[name]
 
     monkeypatch.setattr("theory.research.get_provider", factory)
-    outcome = research(workstream, max_calls=8)
+    outcome = research(workstream, max_calls=8, strategy="off")
 
     assert operations == ["develop", "prove", "attack"]
     assert initialized == [("openai", 0), ("anthropic", 2)]

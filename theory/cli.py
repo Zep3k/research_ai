@@ -683,6 +683,13 @@ def workstream_show(workstream_id: int):
                 f"duplicates: {iteration['duplicate_count']}"
             )
         console.print(f"    why: {escape(iteration['rationale'])}")
+        if iteration["necessity_outcome"] not in {None, "not_applicable"}:
+            console.print(
+                f"    necessity audit: {escape(iteration['necessity_outcome'])} | "
+                f"contract IDs: {escape(iteration['necessity_contract_entity_ids_json'])}"
+            )
+            if iteration["necessity_audit_summary"]:
+                console.print(f"    audit summary: {escape(iteration['necessity_audit_summary'])}")
         if iteration["selection_mode"]:
             console.print(
                 f"    selection: {escape(iteration['selection_mode'])} | "

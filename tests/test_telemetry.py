@@ -225,7 +225,7 @@ def test_v7_migration_keeps_historical_receipt_details_unknown(monkeypatch, tmp_
         con.execute("PRAGMA user_version=7")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 10
+            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
             assert con.execute("SELECT name FROM schema_migrations WHERE version=8").fetchone()[0] == "normalized_call_telemetry"
             migrated = con.execute("SELECT * FROM api_calls").fetchone()
         assert tuple(migrated[key] for key in old_columns) == original

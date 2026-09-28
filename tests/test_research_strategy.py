@@ -113,6 +113,7 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     context, primary, moves, baseline = load_moves(workstream, primary_id)
     assert [(move.operation, move.target_entity_id, move.focus_obligation_id) for move in moves] == [
         ("develop", a, a), ("attack", proof, b),
+        ("reframe", a, a), ("reframe", b, b),
     ]
     assert baseline.operation == "develop" and baseline.target_entity_id == a
     decision = StrategistDecision(selected_move_id=moves[1].move_id, rationale="Attack the concrete candidate now.")
@@ -446,7 +447,7 @@ def test_v8_migration_retains_null_strategy_metadata_and_is_idempotent(monkeypat
         con.execute("PRAGMA user_version=8")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 10
+            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
             assert con.execute("SELECT name FROM schema_migrations WHERE version=9").fetchone()[0] == "research_strategy_selection"
             row = con.execute("SELECT * FROM research_iterations").fetchone()
             assert con.execute("PRAGMA foreign_key_check").fetchall() == []

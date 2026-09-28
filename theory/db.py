@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -8,7 +9,13 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
+
+RESEARCH_NECESSITY_COLUMNS = {
+    "necessity_outcome": "TEXT",
+    "necessity_contract_entity_ids_json": "TEXT",
+    "necessity_audit_summary": "TEXT",
+}
 
 RESEARCH_SELECTION_COLUMNS = {
     "selection_mode": "TEXT",
@@ -289,7 +296,7 @@ CREATE TABLE IF NOT EXISTS research_iterations (
     workstream_id INTEGER NOT NULL,
     iteration_number INTEGER NOT NULL CHECK (iteration_number > 0),
     operation TEXT NOT NULL CHECK (operation IN (
-        'develop', 'attack', 'synthesize', 'prove'
+        'develop', 'attack', 'synthesize', 'prove', 'reframe'
     )),
     target_entity_id INTEGER NOT NULL,
     rationale TEXT NOT NULL CHECK (length(trim(rationale)) > 0),
@@ -306,6 +313,9 @@ CREATE TABLE IF NOT EXISTS research_iterations (
     strategy_provider TEXT,
     strategy_model TEXT,
     focus_obligation_id INTEGER,
+    necessity_outcome TEXT,
+    necessity_contract_entity_ids_json TEXT,
+    necessity_audit_summary TEXT,
     progress_class TEXT,
     progress_level TEXT,
     progress_events_json TEXT,
@@ -874,6 +884,49 @@ def _migrate_workstreams_v6(con: sqlite3.Connection) -> None:
         raise RuntimeError("Foreign-key violation after research-workstream migration.")
 
 
+def _migrate_iterations_v11(con: sqlite3.Connection) -> None:
+    """Rebuild only the operation CHECK; preserve original DDL, rows and indexes."""
+    sql = con.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='research_iterations'"
+    ).fetchone()[0]
+    pattern = r"CHECK\s*\(\s*operation\s+IN\s*\(([^)]*)\)\s*\)"
+    check = re.search(pattern, sql, re.IGNORECASE)
+    if check is None:
+        raise RuntimeError("Cannot locate research_iterations operation constraint.")
+    if "'reframe'" not in check.group(1):
+        indexes_and_triggers = [row[0] for row in con.execute(
+            "SELECT sql FROM sqlite_master WHERE tbl_name='research_iterations' "
+            "AND type IN ('index','trigger') AND sql IS NOT NULL ORDER BY type,name"
+        )]
+        columns = [row[1] for row in con.execute("PRAGMA table_info(research_iterations)")]
+        quoted = ','.join('"' + column.replace('"', '""') + '"' for column in columns)
+        sequence = con.execute("SELECT seq FROM sqlite_sequence WHERE name='research_iterations'").fetchone()
+        updated = sql[:check.start(1)] + check.group(1) + ", 'reframe'" + sql[check.end(1):]
+        create = "CREATE TABLE research_iterations_v11 " + updated[updated.index('('):]
+        con.commit()
+        con.execute("PRAGMA foreign_keys=OFF")
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(create)
+            con.execute(f"INSERT INTO research_iterations_v11({quoted}) SELECT {quoted} FROM research_iterations")
+            con.execute("DROP TABLE research_iterations")
+            con.execute("ALTER TABLE research_iterations_v11 RENAME TO research_iterations")
+            for ddl in indexes_and_triggers:
+                con.execute(ddl)
+            if sequence is not None:
+                con.execute("UPDATE sqlite_sequence SET seq=? WHERE name='research_iterations'", (sequence[0],))
+            if con.execute("PRAGMA foreign_key_check").fetchall():
+                raise RuntimeError("Foreign-key violation after obligation-reframing migration.")
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+        finally:
+            con.execute("PRAGMA foreign_keys=ON")
+    for name, sql_type in RESEARCH_NECESSITY_COLUMNS.items():
+        _add_column(con, "research_iterations", f"{name} {sql_type}")
+
+
 def _migrate_existing(con: sqlite3.Connection) -> None:
     if not _table_exists(con, "projects"):
         return
@@ -913,6 +966,8 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     if version < 10:
         for name, sql_type in RESEARCH_PROGRESS_COLUMNS.items():
             _add_column(con, "research_iterations", f"{name} {sql_type}")
+    if version < 11:
+        _migrate_iterations_v11(con)
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -934,6 +989,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 8, "normalized_call_telemetry")
     _record_migration(con, 9, "research_strategy_selection")
     _record_migration(con, 10, "research_progress_metrics")
+    _record_migration(con, 11, "obligation_reframing")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -972,6 +1028,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 8, "normalized_call_telemetry")
         _record_migration(con, 9, "research_strategy_selection")
         _record_migration(con, 10, "research_progress_metrics")
+        _record_migration(con, 11, "obligation_reframing")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

@@ -311,6 +311,7 @@ After choosing the operation, the pure
 | --- | --- | --- |
 | `develop` | OpenAI `gpt-6-luna` | high |
 | `synthesize` / `prove` | OpenAI `gpt-6-sol` | high |
+| `reframe` (necessity audit) | OpenAI `gpt-6-sol` | high |
 | `attack` without a focus obligation | Anthropic `claude-sonnet-5` | high |
 | `attack` with a focus obligation | Anthropic `claude-opus-5-5` | medium |
 
@@ -334,7 +335,7 @@ Pydantic and scientific validations still run after recording usage. This requir
 
 Role models are configurable through `research_develop_model`,
 `research_synthesize_model`, `research_prove_model`, `research_attack_model`, and
-`research_critical_attack_model` in `.theory/config.json`. Missing fields in old
+`research_critical_attack_model`, plus `research_reframe_model`, in `.theory/config.json`. Missing fields in old
 configs receive the defaults above without rewriting the file. Provider ownership
 and uncached pricing come only from `MODEL_SPECS`; unpriced models fail before a
 call. GPT-6 Astra and Claude Fable 5.1 have registered prices but are rejected in
@@ -356,14 +357,14 @@ used; `ResearchOutcome.calls_made` retains its execution-only meaning, alongside
 `strategy_calls_made` and the derived `total_api_calls_made`.
 
 Legal moves are generated without models or scoring. Each eligible open leaf
-obligation contributes exactly one frontier move using the existing local precedence:
+obligation contributes its normal frontier move using the existing local precedence:
 
 - `attack` first when the focused obligation has a relevant proof attempt that has not yet received one bounded attack;
 - `synthesize` when that obligation has a genuinely new set of at least two directly relevant graph artifacts;
 - `prove` only when an unproved precise non-`ProofAttempt` candidate is deterministically connected to that obligation;
 - `develop` the obligation itself when none of those focused operations is available, or develop the primary object when no obligation is open.
 
-Parents with open children do not compete independently; multiple proof attempts
+Ordinary parents with open children do not compete independently; multiple proof attempts
 on one obligation contribute only the newest unattacked candidate. Exact completed
 synthesis input sets are not repeated. Without open obligations, the baseline
 remains the sole move except when several concrete unattacked proof attempts exist.
@@ -377,8 +378,13 @@ without rewriting them; this milestone permits only that trusted registry model
 for strategy, excluding Sol, Astra and Anthropic models. A compact, deterministic
 `ResearchState` contains stored entity titles and lifecycle/trust/branch states,
 open obligations and their candidate IDs, exact legal moves, the last six
-completed/error iterations with typed progress, and controller counts. It omits
-graph bodies and uses no generated summaries, retrieval, or numerical ranking.
+completed/error iterations with typed progress, and controller counts. Its frozen
+`problem_contract` briefs include the **exact, untruncated bodies** of every non-Paper
+workstream `input`, including the primary target, definitions, models, and assumptions.
+Open obligations expose their full persisted statements, not just shortened titles.
+Unrelated graph bodies remain omitted. No model summary, retrieval, or numerical
+ranking is used. Longer contracts may increase budget admission costs; the controller
+does not silently shorten specifications to fit a prompt.
 
 The prompt asks for the most informative next move toward the primary goal,
 considering falsifiable candidates, uncertainty, obligation closure and recent
@@ -407,6 +413,56 @@ selection rationale, and optional strategy provider/model are persisted in
 `research_iterations` before the execution call. The execution model must echo
 that choice; it cannot redirect the controller. Synthesis must echo and reference
 every required consumed entity.
+
+The decomposition into proof obligations is provisional. A generated obligation
+may encode one sufficient route while being stronger than the actual problem
+contract. In automatic strategy mode, each eligible, active, non-terminal open
+obligation also offers `reframe:<id>:<id>:none` until it has a persisted necessity
+audit or completed audit history. Workstream input obligations never offer reframe.
+The original frontier operation remains available. The deterministic scheduler
+never chooses reframe, so `--strategy off` and explicit provider ablations preserve
+their existing operation-selection baseline.
+
+Reframe is one bounded **execution** call, routed to `gpt-6-sol` at high effort
+(`research_reframe_model` defaults automatically in old configs). The strategist
+still returns only a move ID and rationale; selecting an audit is not a scientific
+verdict. It is instructed to compare obligations against exact contract requirements,
+distinguish sufficiency from necessity, and avoid automatically preferring audits.
+
+The execution report adds `necessity_outcome` (`necessary`, `unnecessary`, or
+`inconclusive` for reframe; `not_applicable` otherwise) and a non-empty list of
+supplied input contract IDs used by the audit. Reframe cannot claim proof completion
+through `addressed_obligation_ids`. Every artifact references the audited obligation;
+replacement proof obligations also reference relevant cited contract inputs. An
+`unnecessary` result must include a concrete alternative-route finding with reasoning
+and references to the cited contract. Scientific necessity is a bounded model
+judgment, not mechanically established by the output validator.
+
+An unnecessary claim does **not** retire the obligation. The controller identifies
+an accepted, non-duplicate quarantined finding, stores its
+`research_reframe_target_obligation_id`, and puts the original obligation in
+`reframe_pending_attack` with audit state `unnecessary_candidate`. It still counts
+as open. Its frontier then attacks that exact finding before ordinary work on the
+obligation, using the existing focused Opus route. A pending parent stays actionable
+even if the audit introduced open replacement children, so they cannot hide this
+independent check.
+
+Only a `no_critical_issue` attack, without an existing unresolved critical issue on
+that same finding, changes the original obligation to `unnecessary`. It then leaves
+the open-obligation set but remains in the graph and audit history. A critical or
+inconclusive attack restores `open` (with challenged/inconclusive audit metadata).
+Necessary or inconclusive audits also leave the obligation open. No second audit
+is offered automatically, and no audit promotes trust or changes `ATTEMPTS` meaning.
+Replacement obligations remain open and actionable. Retirement alone is not proof
+success and introduces no new automatic stopping condition.
+
+Audit outcomes, cited contract IDs, and summaries are persisted on iterations and
+displayed by `workstream show`. A duplicate-only alternative finding cannot start
+the retirement handshake: the operation fails without an accepted audit candidate.
+Reframe uses the ordinary execution budget, telemetry, and one-call validation path.
+The bounds remain execution ≤ `max_calls`, strategy ≤ execution for completed runs,
+and total requests ≤ `2 * max_calls`; a previously singleton obligation can now
+require a strategist call because it offers both its normal move and an audit.
 
 Research uses two contexts. The **full controller context**, loaded by
 `for_workstream()`, remains authoritative for operation/focus selection, stopping,
@@ -451,14 +507,14 @@ typed progress history → future strategist decisions
 
 `ProgressEvent` records a kind plus entity and obligation IDs. All events are kept;
 `progress_class` summarizes them using this fixed precedence:
-`obligation_resolved`, `candidate_challenged`, `branch_closed`,
-`candidate_survived_attack`, `candidate_tested_inconclusive`, `candidate_created`,
+`obligation_resolved`, `obligation_retracted`, `candidate_challenged`, `branch_closed`,
+`candidate_survived_attack`, `candidate_tested_inconclusive`, `obligation_audited`, `candidate_created`,
 `obligation_created`, `frontier_expanded`, `duplicate_only`, `no_progress`.
 
 | Progress level | Persisted events |
 | --- | --- |
-| `closure` | An obligation reached `resolved_candidate`, a candidate was challenged by a critical attack, or an accepted artifact has a blocked/failed/refuted branch status. |
-| `validation` | A candidate survived an attack without obligation closure, or received an inconclusive attack. |
+| `closure` | An obligation reached `resolved_candidate`, an independently attacked necessity finding caused `obligation_retracted`, a candidate was challenged, or an accepted artifact has a terminal branch status. |
+| `validation` | A candidate survived or received an inconclusive attack, or a completed necessity audit produced `obligation_audited`. |
 | `construction` | An accepted `ProofAttempt` or `Lemma` gained an actual `ATTEMPTS` link to an open obligation through the existing persistence rules. |
 | `exploration` | A new proof obligation or otherwise unclassified substantive artifact was accepted. |
 | `none` | Duplicate-only or empty output with no meaningful attack event or state transition. |
@@ -511,7 +567,7 @@ Success or call-limit completion sets lifecycle `completed`; no live branch, sta
 
 ## V0.1 compatibility and migration
 
-The first open of an older database migrates it in place to schema version 10. Back up important `.theory/` directories before any upgrade.
+The first open of an older database migrates it in place to schema version 11. Back up important `.theory/` directories before any upgrade.
 
 Migration behavior is explicit:
 
@@ -540,6 +596,11 @@ Migration behavior is explicit:
     accepted-artifact count. Counts have non-negative checks and the resolution
     flag is constrained to 0/1. Existing columns are unchanged; every new metric
     stays NULL on historical rows. Migration is idempotent.
+16. Schema version 11 (`obligation_reframing`) rebuilds the iteration table to allow
+    `reframe`, preserving existing data, IDs, constraints, indexes, triggers, foreign
+    keys, and the autoincrement sequence. It adds nullable `necessity_outcome`,
+    `necessity_contract_entity_ids_json`, and `necessity_audit_summary`; historical
+    rows remain NULL. Repeated migration is safe and foreign-key checks must pass.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 
