@@ -2321,21 +2321,32 @@ def test_max_calls_summary_reports_remaining_open_obligations(monkeypatch, tmp_p
 def test_human_judgment_request_stops_controller_as_blocked(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, target = make_research_workstream()
+    contract = (
+        "Use either fixed corrupted links or fresh corrupted links in each round. "
+        "Determine the exact optimal threshold for the chosen model. Model choice is unspecified."
+    )
+    with connect() as con:
+        con.execute("UPDATE entities SET body=? WHERE id=?", (contract, target))
 
     def responder(decision, _):
+        assert decision["operation"] == "develop" and decision["target_entity_id"] == target
         return step_report(
             decision,
             [
                 artifact(
                     "open_question",
-                    "Choose whether adaptive corruptions belong in the intended model.",
+                    "Choose between the explicitly supplied fixed-link and changing-link models.",
                     "adaptive_corruption_model_choice",
                     [target],
                     epistemic_status="unresolved",
                 )
             ],
             human=True,
-            human_reason="The graph does not specify the intended adversary model.",
+            human_reason=(
+                "The supplied contract explicitly offers fixed or fresh corrupted links and "
+                "requires the exact optimal threshold for the chosen model. These are different "
+                "optimization problems; a conservative bound cannot settle which optimum is requested."
+            ),
         )
 
     provider = DynamicProvider(responder)
@@ -2343,6 +2354,10 @@ def test_human_judgment_request_stops_controller_as_blocked(monkeypatch, tmp_pat
 
     outcome = research(workstream, "openai", max_calls=5)
 
+    prompt = provider.calls[0]["prompt"]
+    assert contract in prompt
+    assert "no conservative route can proceed without choosing one" in prompt
+    assert "Candidate uncertainty, failed derivations" in prompt
     assert outcome.calls_made == 1
     assert outcome.stop_reason == "human_judgment_required"
     assert outcome.final_status == "blocked"

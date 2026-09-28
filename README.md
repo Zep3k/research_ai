@@ -606,6 +606,16 @@ The controller stops when:
 
 Success or call-limit completion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Each budget refusal happens before the refused request or its execution iteration is recorded and leaves the workstream active. Any earlier paid strategy receipt is retained. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
 
+`human_judgment_required=true` is accepted only for `develop` targeting a supplied
+`role=input` problem-contract entity. The prompt reserves it for explicit contract/model
+text with materially incompatible interpretations when no conservative route can proceed
+without choosing one. All other operations must return `false` and a null reason;
+violations fail output validation. A missing assumption needed to rescue a generated
+candidate belongs in a failed approach, obstruction, open question/proof obligation,
+or `could_not_determine`. It does not justify asking the human to strengthen the
+contract. A valid failed-route report continues through the existing scheduling and
+stopping rules.
+
 Each `research` invocation holds a nonblocking, workstream-scoped lock for its full
 lifetime. A concurrent controller for the same workstream fails before changing state.
 After acquiring the lock and before scheduling, the controller reconciles rows left by

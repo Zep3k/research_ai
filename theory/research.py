@@ -521,6 +521,19 @@ def _input_ids(context: ResearchContext, workstream_id: int) -> set[int]:
     }
 
 
+def _human_judgment_allowed(context: ResearchContext, choice: OperationChoice) -> bool:
+    workstream = getattr(context, "workstream", None)
+    return bool(
+        choice.operation == "develop"
+        and workstream is not None
+        and choice.target_entity_id in _input_ids(context, int(workstream["id"]))
+        and any(
+            int(entity["id"]) == choice.target_entity_id and entity.get("entity_type") != "Paper"
+            for entity in context.entities
+        )
+    )
+
+
 def _primary_target(context: ResearchContext, workstream_id: int) -> dict:
     input_ids = _input_ids(context, workstream_id)
     if not input_ids:
@@ -1829,6 +1842,18 @@ Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
         "currently_open_obligation_ids": choice.open_obligation_ids,
         "focus_obligation_id": choice.focus_obligation_id,
     }
+    human_judgment_instruction = (
+        "This develop operation targets a supplied role=input problem-contract entity. "
+        "Human judgment is permitted only for genuine contract underdetermination: explicit "
+        "supplied specification/model text admits materially incompatible interpretations and "
+        "no conservative route can proceed without choosing one. Identify that text and those "
+        "interpretations in human_judgment_reason. Candidate uncertainty, failed derivations, "
+        "missing lemmas, or an unstated assumption for one route do not qualify."
+        if _human_judgment_allowed(context, choice) else
+        "For this operation, human_judgment_required MUST be false and "
+        "human_judgment_reason MUST be null. Encode missing premises in graph artifacts "
+        "and could_not_determine."
+    )
     return f'''You are executing one bounded operation in a human-directed theoretical-research workbench.
 
 Execute only the selected operation. Do not choose another operation and do not make a second
@@ -1847,8 +1872,13 @@ EPISTEMIC AND WRITE RULES
 - Keep each reasoning_summary concise and technical rather than essay-length.
 - Do not restate an existing entity or existing material_key. Rephrasing is not progress.
 - Every artifact must reference the selected target in related_entity_ids.
-- Set human_judgment_required only when a scientific choice cannot responsibly be made from
-  this graph state.
+- Do not set human_judgment_required because the selected candidate needs an unstated
+  assumption. Record that candidate as conditional/blocked/failed and continue research,
+  using an appropriate failed_approach, obstruction, open_question/proof_obligation, or
+  could_not_determine. Never ask the human to strengthen the contract to save a candidate.
+- Human judgment is only for irreducible ambiguity in the supplied role=input problem
+  contract itself, and is permitted only during develop targeting such an input.
+{human_judgment_instruction}
 {attack_outcome_instruction}
 {consumed_entity_instruction}
 {focus_reference_instruction}
@@ -1940,6 +1970,15 @@ def _validate_step_report(
         raise ModelOutputError(
             f"Research output targeted entity #{report.target_entity_id}, expected "
             f"#{choice.target_entity_id}."
+        )
+    if (
+        (report.human_judgment_required or report.human_judgment_reason is not None)
+        and not _human_judgment_allowed(context, choice)
+    ):
+        raise ModelOutputError(
+            "Human judgment is permitted only for develop targeting a supplied role=input "
+            "problem-contract entity. This operation requires human_judgment_required=false "
+            "and human_judgment_reason=null; record candidate-specific missing premises in artifacts."
         )
     allowed_entity_ids = {int(entity["id"]) for entity in context.entities}
     allowed_source_ids = {int(source["id"]) for source in context.sources}
