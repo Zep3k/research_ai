@@ -333,8 +333,8 @@ def test_progress_record_invariants_and_empty_result():
     with pytest.raises(ValidationError):
         empty.material_progress = True
     assert PROGRESS_PRECEDENCE == (
-        "obligation_resolved", "obligation_retracted", "candidate_challenged", "branch_closed", "candidate_survived_attack",
-        "candidate_tested_inconclusive", "obligation_audited", "candidate_created", "obligation_created", "frontier_expanded",
+        "obligation_resolved", "obligation_bypassed", "obligation_retracted", "candidate_challenged", "branch_closed", "candidate_survived_attack",
+        "candidate_tested_inconclusive", "obligation_audited", "candidate_created", "obligation_created", "obligation_reactivated", "frontier_expanded",
         "duplicate_only", "no_progress",
     )
 

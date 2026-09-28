@@ -429,36 +429,73 @@ still returns only a move ID and rationale; selecting an audit is not a scientif
 verdict. It is instructed to compare obligations against exact contract requirements,
 distinguish sufficiency from necessity, and avoid automatically preferring audits.
 
-The execution report adds `necessity_outcome` (`necessary`, `unnecessary`, or
-`inconclusive` for reframe; `not_applicable` otherwise) and a non-empty list of
-supplied input contract IDs used by the audit. Reframe cannot claim proof completion
-through `addressed_obligation_ids`. Every artifact references the audited obligation;
-replacement proof obligations also reference relevant cited contract inputs. An
-`unnecessary` result must include a concrete alternative-route finding with reasoning
-and references to the cited contract. Scientific necessity is a bounded model
-judgment, not mechanically established by the output validator.
+Reframe outcomes are `required_on_current_routes`, `alternative_route_found`, or
+`inconclusive` (`not_applicable` for other operations). Dependence on current routes
+requires affirmative evidence; lack of a known alternative does not establish
+necessity. A successful reframe establishes a **route-specific, reversible bypass**,
+not universal non-necessity.
 
-An unnecessary claim does **not** retire the obligation. The controller identifies
-an accepted, non-duplicate quarantined finding, stores its
-`research_reframe_target_obligation_id`, and puts the original obligation in
-`reframe_pending_attack` with audit state `unnecessary_candidate`. It still counts
-as open. Its frontier then attacks that exact finding before ordinary work on the
-obligation, using the existing focused Opus route. A pending parent stays actionable
-even if the audit introduced open replacement children, so they cannot hide this
-independent check.
+An alternative must identify the exact parent requirement P and explain a coherent
+route P via B + C without the audited obligation A. Every unresolved premise becomes
+an explicit replacement proof obligation. A complete solution to unrelated workstream
+properties is **not** required, either during construction or the independent attack.
 
-Only a `no_critical_issue` attack, without an existing unresolved critical issue on
-that same finding, changes the original obligation to `unnecessary`. It then leaves
-the open-obligation set but remains in the graph and audit history. A critical or
-inconclusive attack restores `open` (with challenged/inconclusive audit metadata).
-Necessary or inconclusive audits also leave the obligation open. No second audit
-is offered automatically, and no audit promotes trust or changes `ATTEMPTS` meaning.
-Replacement obligations remain open and actionable. Retirement alone is not proof
-success and introduces no new automatic stopping condition.
+The strict `necessity_audit` object contains `parent_requirement` (input entity ID and
+exact body quotation), `contract_clauses` (every materially used input ID and quotation),
+`argument`, and `replacement_obligation_keys`. Its clause IDs must exactly match
+`necessity_contract_entity_ids`; the parent clause must be included. Quotations must
+be nonempty, exact substrings of the cited **bodies**, not merely titles. Any contract
+input referenced by an artifact must also be cited. This catches a WA audit quoting
+Definition #2's “y or bottom” clause while citing only goal #1. It does not mechanically
+prove that an argument has disclosed every semantic dependency; the independent
+attack checks for hidden premises, weakened requirements and circularity. No fuzzy
+matching, repair or judge call is used.
 
-Audit outcomes, cited contract IDs, and summaries are persisted on iterations and
-displayed by `workstream show`. A duplicate-only alternative finding cannot start
-the retirement handshake: the operation fails without an accepted audit candidate.
+Reframe cannot claim proof completion through `addressed_obligation_ids`. Every
+artifact references the audited obligation; replacement proof obligations also reference
+relevant cited inputs. An alternative requires an accepted quarantined finding citing
+all used inputs, and every declared replacement must survive duplicate filtering.
+A duplicate candidate or missing/duplicate replacement cannot silently start a bypass.
+The transaction fails without persisting a partial replacement route.
+
+The original obligation becomes `reframe_pending_attack` with audit state
+`bypass_candidate` and remains open. The next local frontier attacks that exact finding
+using Opus. Only `no_critical_issue`, without a pre-existing unresolved issue on the
+finding, activates `bypassed`. Critical or inconclusive attacks restore `open`.
+Required-on-current-routes and inconclusive audits also leave it open. Audit state and
+completed history suppress automatic repeat audits. Trust and `ATTEMPTS` semantics
+are unchanged; bypass is not proof success and adds no stopping condition.
+
+Route provenance lives in existing graph attributes: the finding records
+`research_reframe_target_obligation_id`, `research_bypass_replacement_obligation_ids`,
+the grounded audit, and `research_bypass_activated_iteration_id`; the original records
+`research_bypass_candidate_ids`. `bypass_route_is_live()` checks only persisted graph
+state. A surviving audit finding supports a route while at least one replacement
+requirement/candidate is active and nonterminal/noncontradicted. Explicit terminal
+branch/attack evidence and contradiction/blocking relations invalidate that direction.
+An inconclusive replacement test alone does not kill it. An explicit empty replacement
+list denotes direct discharge of the parent requirement; that bypass remains until
+the audit finding itself is invalidated. Any other surviving bypass route keeps the
+original bypassed.
+
+Before scheduling and after scientific writes, the controller deterministically
+reopens an obligation whose bypass routes are all exhausted. This costs **zero API
+calls**. The original becomes `open`, with audit state `reactivated`, and resumes its
+ordinary frontier without another automatic audit. Exhausted replacement children
+cannot hide the reopened parent. No artifacts, reviews, or historical decisions are
+deleted. Reactivation within an iteration enters typed progress; changes detected
+between iterations append `obligation_reactivated` event metadata on the original
+entity without inventing a research iteration. Workstream lifecycle/resume rules stay
+unchanged.
+
+Schema **11** already supports this provenance and the new outcome strings: no schema
+rewrite or history backfill is needed. Historical `necessary`/`unnecessary` outcomes
+and `obligation_retracted` events remain readable. Legacy `unnecessary` states lacking
+explicit viable route provenance conservatively reopen at reconciliation; no direct
+discharge is fabricated. New model responses use only the new vocabulary and grounding
+schema. Audit outcomes, cited IDs and inspectable structured summaries remain visible
+in `workstream show`.
+
 Reframe uses the ordinary execution budget, telemetry, and one-call validation path.
 The bounds remain execution ≤ `max_calls`, strategy ≤ execution for completed runs,
 and total requests ≤ `2 * max_calls`; a previously singleton obligation can now
@@ -507,16 +544,16 @@ typed progress history → future strategist decisions
 
 `ProgressEvent` records a kind plus entity and obligation IDs. All events are kept;
 `progress_class` summarizes them using this fixed precedence:
-`obligation_resolved`, `obligation_retracted`, `candidate_challenged`, `branch_closed`,
+`obligation_resolved`, `obligation_bypassed`, `obligation_retracted` (legacy), `candidate_challenged`, `branch_closed`,
 `candidate_survived_attack`, `candidate_tested_inconclusive`, `obligation_audited`, `candidate_created`,
-`obligation_created`, `frontier_expanded`, `duplicate_only`, `no_progress`.
+`obligation_created`, `obligation_reactivated`, `frontier_expanded`, `duplicate_only`, `no_progress`.
 
 | Progress level | Persisted events |
 | --- | --- |
-| `closure` | An obligation reached `resolved_candidate`, an independently attacked necessity finding caused `obligation_retracted`, a candidate was challenged, or an accepted artifact has a terminal branch status. |
+| `closure` | An obligation reached `resolved_candidate`, an independently attacked route caused `obligation_bypassed`, a candidate was challenged, or an accepted artifact has a terminal branch status. |
 | `validation` | A candidate survived or received an inconclusive attack, or a completed necessity audit produced `obligation_audited`. |
 | `construction` | An accepted `ProofAttempt` or `Lemma` gained an actual `ATTEMPTS` link to an open obligation through the existing persistence rules. |
-| `exploration` | A new proof obligation or otherwise unclassified substantive artifact was accepted. |
+| `exploration` | An obligation was reactivated, or a new proof obligation or otherwise unclassified substantive artifact was accepted. |
 | `none` | Duplicate-only or empty output with no meaningful attack event or state transition. |
 
 These levels describe events; they are not numerical scores or rules for choosing
@@ -526,7 +563,8 @@ obligation, and terminal-artifact events do not also count as generic expansion.
 
 For new completed iterations, **`material_progress`** is the broad compatibility
 signal `progress_level != "none"`. **`resolution_progress`** is stricter: the number
-of open graph-recorded proof obligations actually decreased. Counts use the existing
+of open graph-recorded proof obligations actually decreased. A bypass with replacement
+work need not reduce that count; later reactivation can increase it. Counts use the existing
 `_open_obligation_ids()` definition on full context before the operation and after
 committed persistence. They are never estimated as “before + created − resolved.”
 Historical `material_progress` values remain unchanged, and unknown typed metrics

@@ -1,4 +1,4 @@
-"""Offline necessity audits and independent retirement handshake."""
+"""Offline necessity audits and independent reversible-bypass handshake."""
 import copy
 import json
 import sqlite3
@@ -39,6 +39,7 @@ def wa(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, primary = make_research_workstream()
     with connect() as con:
+        con.execute("UPDATE entities SET title='Weak Agreement' WHERE id=?", (primary,))
         contract = add_entity(con, "Definition", "Weak consistency", body=CONTRACT)
         link_workstream_entity(con, workstream, contract, "input")
     obligation = add_linked_research_entity(workstream, "OpenQuestion", OBLIGATION, proof_obligation=True)
@@ -56,7 +57,7 @@ def planning(wa):
     return context, primary, history, moves, state
 
 
-def responder(wa, *, necessity="unnecessary", attack="no_critical_issue", replacement=False):
+def responder(wa, *, necessity="alternative_route_found", attack="no_critical_issue", replacement=False):
     _, _, contract, obligation = wa
     def execute(decision, _):
         if decision["operation"] == "attack":
@@ -68,7 +69,7 @@ def responder(wa, *, necessity="unnecessary", attack="no_critical_issue", replac
                                unresolved=["Propagation timing remains uncertain."] if attack == "inconclusive" else [])
         assert decision["operation"] == "reframe"
         artifacts = []
-        if necessity == "unnecessary":
+        if necessity == "alternative_route_found":
             candidate = artifact("finding", "Conflicts may be propagated so honest parties output bottom; forbidding all conflicts is only a sufficient route.",
                                  "propagated_conflict_route", [obligation, contract])
             candidate["reasoning_summary"] = "The stated weak-consistency condition permits bottom. An alternative protocol propagates conflict evidence and makes recipients abstain; it must still meet all other contract conditions."
@@ -77,7 +78,13 @@ def responder(wa, *, necessity="unnecessary", attack="no_critical_issue", replac
             artifacts.append(artifact("proof_obligation", "Show timely dissemination of conflict evidence before incompatible honest decisions.",
                                       "conflict_dissemination_obligation", [obligation, contract]))
         return {**step_report(decision, artifacts), "necessity_outcome": necessity,
-                "necessity_contract_entity_ids": [contract]}
+                "necessity_contract_entity_ids": [contract],
+                "necessity_audit": {
+                    "parent_requirement": {"entity_id": contract, "quote": CONTRACT},
+                    "contract_clauses": [{"entity_id": contract, "quote": CONTRACT}],
+                    "argument": "Weak consistency permits bottom. Propagate conflicting evidence before incompatible non-bottom decisions; this route does not require excluding conflicting certificates. The timing premise is explicit below when unresolved; no proof of unrelated protocol properties is claimed.",
+                    "replacement_obligation_keys": ["conflict_dissemination_obligation"] if replacement else [],
+                }}
     return execute
 
 
@@ -116,7 +123,7 @@ def test_exact_contract_and_obligation_statement_are_pure_untruncated(wa, monkey
 
 
 @pytest.mark.parametrize("replacement", [False, True])
-def test_wa_audit_requires_independent_attack_before_retirement(wa, monkeypatch, replacement):
+def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, replacement):
     workstream, primary_id, contract, obligation = wa
     context, primary, history, moves, state = planning(wa)
     assert [move.move_id for move in moves] == [f"develop:{obligation}:{obligation}:none", f"reframe:{obligation}:{obligation}:none"]
@@ -129,6 +136,7 @@ def test_wa_audit_requires_independent_attack_before_retirement(wa, monkeypatch,
             after = for_workstream(workstream)
             attrs = after.attributes[obligation]
             assert attrs["research_obligation_state"] == "reframe_pending_attack"
+            assert attrs["research_necessity_audit_state"] == "bypass_candidate"
             candidate = int(attrs["research_reframe_candidate_id"])
             assert candidate == decision["target_entity_id"]
             assert after.attributes[candidate]["research_reframe_target_obligation_id"] == str(obligation)
@@ -154,7 +162,7 @@ def test_wa_audit_requires_independent_attack_before_retirement(wa, monkeypatch,
     assert outcome.total_api_calls_made == len(requests) <= 4
     assert stage
     after, _, _, remaining_moves, _ = planning(wa)
-    assert after.attributes[obligation]["research_obligation_state"] == "unnecessary"
+    assert after.attributes[obligation]["research_obligation_state"] == "bypassed"
     assert obligation not in _open_obligation_ids(after, workstream, primary_id)
     assert not any(move.target_entity_id == obligation or move.focus_obligation_id == obligation for move in remaining_moves)
     if replacement:
@@ -165,12 +173,12 @@ def test_wa_audit_requires_independent_attack_before_retirement(wa, monkeypatch,
         iterations = [dict(row) for row in con.execute("SELECT * FROM research_iterations ORDER BY id")]
         receipts = [tuple(row) for row in con.execute("SELECT purpose,provider,model FROM api_calls ORDER BY id")]
     assert [row["operation"] for row in iterations] == ["reframe", "attack"]
-    assert iterations[0]["necessity_outcome"] == "unnecessary"
+    assert iterations[0]["necessity_outcome"] == "alternative_route_found"
     assert json.loads(iterations[0]["necessity_contract_entity_ids_json"]) == [contract]
     assert iterations[0]["necessity_audit_summary"]
     assert iterations[0]["progress_class"] == "obligation_audited"
     assert iterations[0]["resolution_progress"] == 0
-    assert iterations[1]["progress_class"] == "obligation_retracted"
+    assert iterations[1]["progress_class"] == "obligation_bypassed"
     assert iterations[1]["resolution_progress"] == 1
     assert iterations[1]["resolved_obligation_count"] == 0  # Retraction is not a proof.
     assert receipts[0] == ("research:strategy", "openai", "gpt-6-luna")
@@ -178,7 +186,7 @@ def test_wa_audit_requires_independent_attack_before_retirement(wa, monkeypatch,
     assert receipts[-1] == ("research:attack", "anthropic", "claude-opus-5-5")
 
 
-@pytest.mark.parametrize("necessity", ["necessary", "inconclusive"])
+@pytest.mark.parametrize("necessity", ["required_on_current_routes", "inconclusive"])
 def test_completed_audit_stays_open_and_is_not_repeated(wa, monkeypatch, necessity):
     workstream, primary_id, _, obligation = wa
     requests, _ = install_providers(monkeypatch, execute=responder(wa, necessity=necessity), select=select_audit_or_attack)
@@ -250,13 +258,13 @@ def test_non_reframe_cannot_claim_necessity(wa):
     context, primary, _, moves, _ = planning(wa)
     choice = moves[0].to_operation_choice()
     decision = decision_from_prompt(_research_prompt(context, primary, choice))
-    report = ResearchStepReport.model_validate({**step_report(decision, []), "necessity_outcome": "necessary",
+    report = ResearchStepReport.model_validate({**step_report(decision, []), "necessity_outcome": "required_on_current_routes",
                                                "necessity_contract_entity_ids": [wa[2]]})
     with pytest.raises(ModelOutputError, match="Only reframe"):
         _validate_step_report(report, context, choice)
 
 
-def test_duplicate_alternative_does_not_start_retirement_handshake(wa, monkeypatch):
+def test_duplicate_alternative_does_not_start_bypass_handshake(wa, monkeypatch):
     workstream, _, _, obligation = wa
     prior = add_linked_research_entity(workstream, "Finding", "Previously considered route")
     with connect() as con:
@@ -339,7 +347,7 @@ def test_v10_migration_preserves_rows_constraints_indexes_foreign_keys_and_seque
         assert cur.lastrowid == 78
 
 
-def test_preexisting_critical_issue_blocks_retirement_despite_no_issue_response(wa, monkeypatch):
+def test_preexisting_critical_issue_blocks_bypass_despite_no_issue_response(wa, monkeypatch):
     workstream, primary_id, _, obligation = wa
     execute = responder(wa)
     def inspect(decision, n):
@@ -378,16 +386,16 @@ def test_attack_can_create_replacement_without_net_resolution_progress(wa, monke
     research(workstream, max_calls=2)
     with connect() as con:
         row = con.execute("SELECT progress_class,resolution_progress,open_obligations_before,open_obligations_after FROM research_iterations ORDER BY id DESC LIMIT 1").fetchone()
-    assert tuple(row) == ("obligation_retracted", 0, 1, 1)
+    assert tuple(row) == ("obligation_bypassed", 0, 1, 1)
 
 
 def test_cli_displays_reframe_audit_without_extra_calls(wa, monkeypatch):
     workstream, _, _, _ = wa
-    requests, _ = install_providers(monkeypatch, execute=responder(wa, necessity="necessary"), select=select_audit_or_attack)
+    requests, _ = install_providers(monkeypatch, execute=responder(wa, necessity="required_on_current_routes"), select=select_audit_or_attack)
     result = CliRunner().invoke(app, ["research", str(workstream), "--max-calls", "1"])
     assert result.exit_code == 0, result.output
     output = " ".join(result.output.split())
-    assert "necessity audit: necessary" in output and "research:reframe" in output
+    assert "necessity audit: required_on_current_routes" in output and "research:reframe" in output
     assert "progress: validation / obligation_audited" in output
     assert len(requests) == 2
 
@@ -400,10 +408,231 @@ def test_completed_history_alone_suppresses_repeat_audit(wa):
     assert all(move.operation != "reframe" for move in moves)
 
 
-@pytest.mark.parametrize("state", ["blocked", "resolved_candidate", "unnecessary"])
+@pytest.mark.parametrize("state", ["blocked", "resolved_candidate", "bypassed", "unnecessary"])
 def test_inactive_obligations_are_not_offered_for_reframe(wa, state):
     workstream, _, _, obligation = wa
     with connect() as con:
         set_attribute(con, obligation, "research_obligation_state", state)
     _, _, _, moves, _ = planning(wa)
     assert all(move.operation != "reframe" for move in moves)
+
+
+def activate_bypass(wa, monkeypatch, *, replacement=True):
+    requests, _ = install_providers(monkeypatch, execute=responder(wa, replacement=replacement), select=select_audit_or_attack)
+    outcome = research(wa[0], provider_name="auto", max_calls=2)
+    context = for_workstream(wa[0])
+    candidate = int(context.attributes[wa[3]]["research_reframe_candidate_id"])
+    replacements = json.loads(context.attributes[candidate]["research_bypass_replacement_obligation_ids"])
+    assert context.attributes[wa[3]]["research_obligation_state"] == "bypassed"
+    return requests, outcome, candidate, replacements
+
+
+@pytest.mark.parametrize("terminal", ["blocked", "failed", "refuted", "contradicted"])
+def test_wa_bypass_reopens_without_calls_and_keeps_history(wa, monkeypatch, terminal):
+    from theory.research import bypass_route_is_live, reactivate_bypassed_obligations
+    workstream, primary, contract, obligation = wa
+    requests, outcome, candidate, replacements = activate_bypass(wa, monkeypatch)
+    assert len(replacements) == 1 and outcome.total_api_calls_made <= 4
+    context = for_workstream(workstream)
+    assert bypass_route_is_live(context, obligation, candidate)
+    assert contract in json.loads(context.attributes[candidate]["research_necessity_contract_entity_ids"])
+    audit = json.loads(context.attributes[candidate]["research_necessity_audit"])
+    assert audit["parent_requirement"] == {"entity_id": contract, "quote": CONTRACT}
+    assert replacements[0] in _open_obligation_ids(context, workstream, primary)
+    with connect() as con:
+        history = [tuple(row) for row in con.execute("SELECT * FROM research_iterations ORDER BY id")]
+        entities_before = con.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
+        receipts = con.execute("SELECT COUNT(*) FROM api_calls").fetchone()[0]
+        if terminal == "contradicted":
+            con.execute("UPDATE entities SET trust_state='contradicted' WHERE id=?", (replacements[0],))
+        else:
+            set_attribute(con, replacements[0], "research_branch_status", terminal)
+    monkeypatch.setattr("theory.research.call_model", lambda **_: pytest.fail("Reactivation must be free"))
+    events = reactivate_bypassed_obligations(workstream)
+    assert [event.kind for event in events] == ["obligation_reactivated"]
+    assert reactivate_bypassed_obligations(workstream) == ()
+    context, _, _, moves, _ = planning(wa)
+    assert not bypass_route_is_live(context, obligation, candidate)
+    assert context.attributes[obligation]["research_obligation_state"] == "open"
+    assert obligation in _open_obligation_ids(context, workstream, primary)
+    assert any(move.focus_obligation_id == obligation and move.operation != "reframe" for move in moves)
+    assert not any(move.operation == "reframe" and move.target_entity_id == obligation for move in moves)
+    log = json.loads(context.attributes[obligation]["research_bypass_reactivation_events"])
+    assert len(log) == 1 and log[0]["candidate_ids"] == [candidate]
+    assert context.attributes[candidate]["research_attack_state"] == "survived_attack"
+    with connect() as con:
+        assert [tuple(row) for row in con.execute("SELECT * FROM research_iterations ORDER BY id")] == history
+        assert con.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == entities_before
+        assert con.execute("SELECT COUNT(*) FROM api_calls").fetchone()[0] == receipts == len(requests)
+
+
+def test_one_surviving_replacement_keeps_route_live(wa, monkeypatch):
+    from theory.research import bypass_route_is_live, reactivate_bypassed_obligations
+    _, _, candidate, replacements = activate_bypass(wa, monkeypatch)
+    other = add_linked_research_entity(wa[0], "OpenQuestion", "Another viable replacement premise", proof_obligation=True)
+    with connect() as con:
+        set_attribute(con, candidate, "research_bypass_replacement_obligation_ids", json.dumps([*replacements, other]))
+        set_attribute(con, replacements[0], "research_branch_status", "failed")
+        # An inconclusive test is not terminalization of the surviving premise.
+        set_attribute(con, other, "research_attack_state", "inconclusive")
+    assert bypass_route_is_live(for_workstream(wa[0]), wa[3], candidate)
+    assert reactivate_bypassed_obligations(wa[0]) == ()
+    assert for_workstream(wa[0]).attributes[wa[3]]["research_obligation_state"] == "bypassed"
+
+
+def test_another_surviving_bypass_candidate_prevents_reactivation(wa, monkeypatch):
+    from theory.research import reactivate_bypassed_obligations
+    _, _, candidate, replacements = activate_bypass(wa, monkeypatch)
+    other = add_linked_research_entity(wa[0], "Finding", "A separately audited direct parent route")
+    with connect() as con:
+        set_attribute(con, replacements[0], "research_branch_status", "refuted")
+        for key, value in {
+            "research_reframe_target_obligation_id": str(wa[3]),
+            "research_bypass_replacement_obligation_ids": "[]",
+            "research_bypass_activated_iteration_id": "1",
+            "research_attack_state": "survived_attack",
+        }.items():
+            set_attribute(con, other, key, value)
+        set_attribute(con, wa[3], "research_bypass_candidate_ids", json.dumps([candidate, other]))
+    assert reactivate_bypassed_obligations(wa[0]) == ()
+    with connect() as con:
+        con.execute("UPDATE entities SET trust_state='contradicted' WHERE id=?", (other,))
+    assert len(reactivate_bypassed_obligations(wa[0])) == 1
+
+
+@pytest.mark.parametrize("terminal", ["failed", "contradicted"])
+def test_direct_discharge_persists_until_audit_candidate_invalidated(wa, monkeypatch, terminal):
+    from theory.research import reactivate_bypassed_obligations
+    _, _, candidate, replacements = activate_bypass(wa, monkeypatch, replacement=False)
+    assert replacements == []
+    assert reactivate_bypassed_obligations(wa[0]) == ()
+    with connect() as con:
+        if terminal == "contradicted":
+            con.execute("UPDATE entities SET trust_state='contradicted' WHERE id=?", (candidate,))
+        else:
+            set_attribute(con, candidate, "research_branch_status", terminal)
+    assert len(reactivate_bypassed_obligations(wa[0])) == 1
+
+
+@pytest.mark.parametrize("omission", ["citations", "misattributed_quote", "artifact_dependency"])
+def test_wa_cannot_ground_weak_consistency_in_goal_title_only(wa, omission):
+    context, _, _, moves, _ = planning(wa)
+    choice = next(move for move in moves if move.operation == "reframe").to_operation_choice()
+    decision = {"operation": "reframe", "target_entity_id": wa[3], "required_consumed_entity_ids": []}
+    raw = responder(wa, replacement=True)(decision, None)
+    raw["necessity_contract_entity_ids"] = [wa[1]]  # Omits the decisive Definition #2.
+    if omission == "misattributed_quote":
+        raw["necessity_audit"]["parent_requirement"]["entity_id"] = wa[1]
+        raw["necessity_audit"]["contract_clauses"][0]["entity_id"] = wa[1]
+    if omission == "artifact_dependency":
+        # Even valid goal-body quotations cannot hide explicit artifact dependencies.
+        with connect() as con:
+            con.execute("UPDATE entities SET body='Weak Agreement' WHERE id=?", (wa[1],))
+        context = for_workstream(wa[0])
+        clause = {"entity_id": wa[1], "quote": "Weak Agreement"}
+        raw["necessity_audit"]["parent_requirement"] = clause
+        raw["necessity_audit"]["contract_clauses"] = [clause]
+    with pytest.raises(ModelOutputError, match="contract|Contract"):
+        _validate_step_report(ResearchStepReport.model_validate(raw), context, choice)
+
+
+def test_missing_replacement_premise_is_rejected_without_retry(wa, monkeypatch):
+    execute = responder(wa, replacement=True)
+    def incomplete(decision, prompt):
+        raw = execute(decision, prompt)
+        raw["necessity_audit"]["replacement_obligation_keys"].append("unrecorded_premise")
+        return raw
+    requests, _ = install_providers(monkeypatch, execute=incomplete, select=select_audit_or_attack)
+    with pytest.raises(ModelOutputError, match="replacement premise"):
+        research(wa[0], provider_name="auto", max_calls=1)
+    assert len(requests) == 2
+    context = for_workstream(wa[0])
+    assert context.attributes[wa[3]].get("research_necessity_audit_state") is None
+
+
+def test_duplicate_replacement_cannot_be_silently_dropped(wa, monkeypatch):
+    execute = responder(wa, replacement=True)
+    replacement = execute({"operation": "reframe", "target_entity_id": wa[3], "required_consumed_entity_ids": []}, None)["artifacts"][1]
+    prior = add_linked_research_entity(wa[0], "OpenQuestion", replacement["statement"], proof_obligation=True)
+    with connect() as con:
+        set_attribute(con, prior, "research_material_key", replacement["material_key"])
+    requests, _ = install_providers(monkeypatch, execute=execute, select=select_audit_or_attack)
+    with pytest.raises(ModelOutputError, match="replacement premise"):
+        research(wa[0], provider_name="auto", max_calls=1)
+    assert len(requests) == 2
+    assert for_workstream(wa[0]).attributes[wa[3]].get("research_reframe_candidate_id") is None
+
+
+def test_legacy_unnecessary_without_route_provenance_reopens_conservatively(wa):
+    from theory.research import reactivate_bypassed_obligations
+    with connect() as con:
+        set_attribute(con, wa[3], "research_obligation_state", "unnecessary")
+        set_attribute(con, wa[3], "research_necessity_audit_state", "unnecessary")
+    assert len(reactivate_bypassed_obligations(wa[0])) == 1
+    _, _, _, moves, _ = planning(wa)
+    assert all(move.operation != "reframe" for move in moves)
+
+
+def test_reactivation_is_automatic_before_scheduling(wa, monkeypatch):
+    _, _, _, replacements = activate_bypass(wa, monkeypatch)
+    with connect() as con:
+        set_attribute(con, replacements[0], "research_branch_status", "failed")
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (wa[0],))
+    def select(state):
+        original = next(o for o in state["open_obligations"] if o["id"] == wa[3])
+        assert original["obligation_state"] == "open"
+        moves = [m for m in state["legal_moves"] if m["focus_obligation_id"] == wa[3]]
+        assert moves and all(m["operation"] != "reframe" for m in moves)
+        return {"selected_move_id": moves[0]["move_id"], "rationale": "Resume the original route."}
+    def execute(decision, _):
+        return step_report(decision, [artifact("obstruction", "The original certificate route still needs a coherent locking invariant.",
+                                               "resumed_original_route", [decision["target_entity_id"],
+                                                                          *decision["required_consumed_entity_ids"]])])
+    requests, _ = install_providers(monkeypatch, execute=execute, select=select)
+    result = research(wa[0], provider_name="auto", max_calls=1)
+    assert result.calls_made == 1 and result.strategy_calls_made <= 1
+    assert len(requests) == result.total_api_calls_made <= 2
+    assert for_workstream(wa[0]).attributes[wa[3]]["research_obligation_state"] == "open"
+
+
+def test_route_failure_during_execution_records_reactivation_progress(wa, monkeypatch):
+    _, _, _, replacements = activate_bypass(wa, monkeypatch)
+    with connect() as con:
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (wa[0],))
+    def select(state):
+        move = next(m for m in state["legal_moves"] if m["operation"] == "develop" and m["target_entity_id"] == replacements[0])
+        return {"selected_move_id": move["move_id"], "rationale": "Check conflict visibility."}
+    def execute(decision, _):
+        return step_report(decision, [artifact("failed_approach", "This visibility route is refuted by an admissible delayed-evidence schedule.",
+                                               "visibility_route_refuted", [replacements[0]], branch_status="refuted")])
+    requests, _ = install_providers(monkeypatch, execute=execute, select=select)
+    result = research(wa[0], provider_name="auto", max_calls=1)
+    assert len(requests) == result.total_api_calls_made == 2
+    with connect() as con:
+        row = dict(con.execute("SELECT * FROM research_iterations ORDER BY id DESC LIMIT 1").fetchone())
+    assert row["open_obligations_before"] == 1 and row["open_obligations_after"] == 2
+    assert row["resolution_progress"] == 0
+    events = json.loads(row["progress_events_json"])
+    assert {e["kind"] for e in events} == {"branch_closed", "obligation_reactivated"}
+    assert for_workstream(wa[0]).attributes[wa[3]]["research_obligation_state"] == "open"
+
+
+def test_reframe_prompt_uses_parent_scope_and_explicit_premises(wa):
+    context, primary, _, moves, _ = planning(wa)
+    choice = next(move for move in moves if move.operation == "reframe").to_operation_choice()
+    prompt = _research_prompt(context, primary, choice)
+    assert "A complete solution to unrelated workstream properties is NOT required" in prompt
+    assert "EVERY unresolved premise" in prompt
+    assert "not absence of evidence" in prompt
+    assert "Definition, Assumption, Model, or Technique" in prompt
+    assert "parent_requirement" in prompt and "contract_clauses" in prompt
+    assert "replacement_obligation_keys" in prompt
+
+
+def test_later_inconclusive_test_does_not_terminalize_direct_bypass(wa, monkeypatch):
+    from theory.research import bypass_route_is_live, reactivate_bypassed_obligations
+    _, _, candidate, _ = activate_bypass(wa, monkeypatch, replacement=False)
+    with connect() as con:
+        set_attribute(con, candidate, "research_attack_state", "inconclusive")
+    assert bypass_route_is_live(for_workstream(wa[0]), wa[3], candidate)
+    assert reactivate_bypassed_obligations(wa[0]) == ()

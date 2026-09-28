@@ -8,9 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator,
 
 
 ProgressEventKind = Literal[
-    "obligation_resolved", "obligation_retracted", "candidate_challenged", "branch_closed",
+    "obligation_resolved", "obligation_bypassed", "obligation_retracted", "candidate_challenged", "branch_closed",
     "candidate_survived_attack", "candidate_tested_inconclusive",
-    "obligation_audited", "candidate_created", "obligation_created", "frontier_expanded",
+    "obligation_audited", "candidate_created", "obligation_created", "obligation_reactivated", "frontier_expanded",
     "duplicate_only", "no_progress",
 ]
 ProgressLevel = Literal["closure", "validation", "construction", "exploration", "none"]
@@ -18,7 +18,9 @@ ProgressLevel = Literal["closure", "validation", "construction", "exploration", 
 PROGRESS_PRECEDENCE = get_args(ProgressEventKind)
 EVENT_LEVEL: dict[str, ProgressLevel] = {
     "obligation_resolved": "closure",
-    "obligation_retracted": "closure",
+    "obligation_retracted": "closure",  # Historical telemetry remains readable.
+    "obligation_bypassed": "closure",
+    "obligation_reactivated": "exploration",
     "obligation_audited": "validation",
     "candidate_challenged": "closure",
     "branch_closed": "closure",
@@ -54,7 +56,7 @@ class ProgressEvent(BaseModel):
                 raise ValueError("Empty-result events cannot have subjects")
         elif not self.entity_ids:
             raise ValueError("Progress events require an entity subject")
-        if self.kind in {"obligation_resolved", "obligation_retracted", "obligation_audited", "candidate_created", "obligation_created"} and not self.obligation_ids:
+        if self.kind in {"obligation_resolved", "obligation_retracted", "obligation_bypassed", "obligation_reactivated", "obligation_audited", "candidate_created", "obligation_created"} and not self.obligation_ids:
             raise ValueError("Obligation progress requires an obligation subject")
         return self
 

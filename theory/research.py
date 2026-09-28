@@ -60,7 +60,7 @@ CRITICAL_ARTIFACT_TYPES = {"counterexample", "obstruction", "failed_approach"}
 PROOF_ARTIFACT_TYPES = {"lemma", "proof_attempt"}
 TERMINAL_BRANCH_STATES = {"blocked", "failed", "refuted"}
 LIVE_BRANCH_STATES = {"promising", "unresolved"}
-INACTIVE_OBLIGATION_STATES = {"blocked", "resolved_candidate", "unnecessary"}
+INACTIVE_OBLIGATION_STATES = {"blocked", "resolved_candidate", "bypassed", "unnecessary"}
 PRECISE_ENTITY_TYPES = {"Theorem", "Lemma", "ProofAttempt"}
 SYNTHESIS_INPUT_TYPES = {
     "Assumption",
@@ -199,6 +199,28 @@ ResearchArtifactVariant = (
 )
 
 
+class ContractClause(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    entity_id: int = Field(gt=0)
+    quote: str = Field(min_length=1)
+
+
+class NecessityAudit(BaseModel):
+    """Inspectable route argument, not a model-supplied controller verdict."""
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    parent_requirement: ContractClause
+    contract_clauses: list[ContractClause] = Field(min_length=1, max_length=24)
+    argument: str = Field(min_length=1, max_length=5000)
+    replacement_obligation_keys: list[str] = Field(max_length=4)
+
+    @field_validator("argument")
+    @classmethod
+    def nonempty_argument(cls, value: str) -> str:
+        return _strip_nonempty(value)
+
+
 class ResearchStepReport(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -212,8 +234,9 @@ class ResearchStepReport(BaseModel):
         "not_applicable", "critical_issue", "no_critical_issue", "inconclusive"
     ]
     could_not_determine: list[str] = Field(default_factory=list, max_length=12)
-    necessity_outcome: Literal["not_applicable", "necessary", "unnecessary", "inconclusive"] = "not_applicable"
+    necessity_outcome: Literal["not_applicable", "required_on_current_routes", "alternative_route_found", "inconclusive"] = "not_applicable"
     necessity_contract_entity_ids: list[int] = Field(default_factory=list, max_length=24)
+    necessity_audit: NecessityAudit | None = None
     human_judgment_required: bool
     human_judgment_reason: str | None
 
@@ -964,6 +987,11 @@ def eligible_open_obligation_ids(
             parent_id
             for parent_id in explicit_parents & open_ids
             if parent_id != child_id
+            # An exhausted replacement must not hide the route it reactivated.
+            and not (
+                _attribute(context, parent_id, "research_necessity_audit_state") == "reactivated"
+                and not _route_entity_is_live(context, child_id)
+            )
         )
 
     # A pending necessity challenge must remain actionable even if its audit
@@ -1020,7 +1048,7 @@ def _obligation_frontier_choice(
         if _completed_for_target(history, "attack", candidate_id):
             raise TheoryError("Pending reframe candidate already has a completed attack.")
         return OperationChoice(
-            "attack", candidate_id, "Independently test the proposed unnecessary-obligation finding.",
+            "attack", candidate_id, "Independently test the proposed bypass route.",
             open_obligation_ids=open_obligations, focus_obligation_id=obligation_id,
         )
     relevant_unattacked = tuple(
@@ -1182,17 +1210,16 @@ def choose_next_operation(
 def _operation_instructions(choice: OperationChoice) -> str:
     if choice.operation == "reframe":
         return (
-            "Audit whether the TARGET OBLIGATION is required by the supplied problem contract. "
-            "Ask: (1) What parent property is it intended to establish? "
-            "(2) Does that property logically require this obligation? "
-            "(3) Is the obligation stronger than the contract? "
-            "(4) Can the contract be satisfied while the obligation is false? "
-            "(5) Is there a concrete alternative proof/protocol route? "
-            "Do not confuse failure of the current candidate with an unnecessary obligation. "
-            "Do not weaken the contract. Use only supplied context. "
-            "necessary means current evidence supports genuine necessity; unnecessary requires "
-            "a concrete alternative route, emitted as a finding with statement and reasoning; "
-            "inconclusive means the supplied context cannot establish necessity or dispensability."
+            "Audit whether the TARGET OBLIGATION can be bypassed on a concrete route to its "
+            "exact parent requirement. Identify that requirement and quote the materially "
+            "relevant supplied contract bodies. Do not weaken the contract. "
+            "alternative_route_found means P can follow via B + C without the audited A; "
+            "expose EVERY unresolved premise B/C as an explicit replacement proof_obligation. "
+            "A complete solution to unrelated workstream properties is NOT required. "
+            "required_on_current_routes requires affirmative evidence of dependence on the "
+            "current routes, not absence of evidence for alternatives or universal necessity. "
+            "Use inconclusive when neither dependence nor a coherent bypass is established. "
+            "Do not confuse a failed candidate with a dispensable obligation. Use only supplied context."
         )
     if choice.operation == "develop":
         if choice.focus_obligation_id is not None:
@@ -1295,7 +1322,7 @@ def _can_reframe(
 
 def _reframe_candidate_id(context: ResearchContext, workstream_id: int, obligation_id: int) -> int:
     if obligation_id in _input_ids(context, workstream_id):
-        raise TheoryError("A problem-contract input cannot be retired by a necessity audit.")
+        raise TheoryError("A problem-contract input cannot be bypassed by a necessity audit.")
     raw = _attribute(context, obligation_id, "research_reframe_candidate_id")
     try:
         candidate_id = int(raw)
@@ -1319,6 +1346,80 @@ def _is_reframe_attack(context: ResearchContext, choice: OperationChoice) -> boo
         and _attribute(context, focus, "research_reframe_candidate_id") == str(choice.target_entity_id)
         and _attribute(context, choice.target_entity_id, "research_reframe_target_obligation_id") == str(focus)
     )
+
+
+def _route_entity_is_live(context: ResearchContext, entity_id: int) -> bool:
+    entity = next((e for e in context.entities if int(e["id"]) == entity_id), None)
+    return bool(
+        entity and entity["status"] == "active" and entity["trust_state"] != "contradicted"
+        and not _has_terminal_branch_state(context, entity_id)
+        and _attribute(context, entity_id, "research_obligation_state") != "blocked"
+        and _attribute(context, entity_id, "research_attack_state") != "challenged"
+        and not any(
+            e["entity_type"] in {"Counterexample", "Obstruction", "FailedApproach"}
+            and e["status"] == "active" and e["trust_state"] != "contradicted"
+            and _has_terminal_branch_state(context, int(e["id"]))
+            and entity_id in _stored_id_set(_attribute(context, int(e["id"]), "related_entity_ids"))
+            for e in context.entities
+        )
+        and not any(
+            (r["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"} and int(r["target_entity_id"]) == entity_id)
+            or (r["relation_type"] == "FAILS_AT" and int(r["source_entity_id"]) == entity_id)
+            for r in context.relations
+        )
+    )
+
+
+def bypass_route_is_live(context: ResearchContext, obligation_id: int, candidate_id: int) -> bool:
+    """A bounded surviving route, never a claim of universal non-necessity.
+
+    Missing legacy route provenance cannot establish a live bypass. An explicit
+    empty replacement list means a directly discharged parent requirement.
+    """
+    attrs = context.attributes.get(candidate_id, {})
+    if (attrs.get("research_reframe_target_obligation_id") != str(obligation_id)
+            or not attrs.get("research_bypass_activated_iteration_id")
+            or not _route_entity_is_live(context, candidate_id)):
+        return False
+    raw = attrs.get("research_bypass_replacement_obligation_ids")
+    if raw is None:
+        return False
+    replacements = json.loads(raw)
+    if not isinstance(replacements, list) or any(type(i) is not int or i <= 0 for i in replacements):
+        raise TheoryError("Invalid persisted bypass replacement provenance.")
+    return not replacements or any(_route_entity_is_live(context, i) for i in replacements)
+
+
+def reactivate_bypassed_obligations(workstream_id: int) -> tuple[ProgressEvent, ...]:
+    """Reconcile persisted routes without a model call or synthetic iteration.
+
+    Called before scheduling and after scientific writes. Out-of-iteration
+    transitions retain append-only event metadata on the original obligation;
+    in-iteration transitions also enter the ordinary typed progress record.
+    """
+    context = for_workstream(workstream_id)
+    reopened: list[ProgressEvent] = []
+    with connect() as con:
+        for obligation_id in sorted(_linked_ids(context, workstream_id)):
+            attrs = context.attributes.get(obligation_id, {})
+            if attrs.get("research_obligation_state") not in {"bypassed", "unnecessary"}:
+                continue
+            routes = set(_stored_id_set(attrs.get("research_bypass_candidate_ids")))
+            current = attrs.get("research_reframe_candidate_id")
+            if current is not None:
+                routes.add(int(current))
+            if any(bypass_route_is_live(context, obligation_id, candidate) for candidate in sorted(routes)):
+                continue
+            event = ProgressEvent(kind="obligation_reactivated", entity_ids=(obligation_id,),
+                                  obligation_ids=(obligation_id,))
+            log = json.loads(attrs.get("research_bypass_reactivation_events", "[]"))
+            log.append({**event.model_dump(mode="json"), "previous_state": attrs["research_obligation_state"],
+                        "candidate_ids": sorted(routes), "timestamp": utcnow()})
+            set_attribute(con, obligation_id, "research_bypass_reactivation_events", json.dumps(log))
+            set_attribute(con, obligation_id, "research_obligation_state", "open")
+            set_attribute(con, obligation_id, "research_necessity_audit_state", "reactivated")
+            reopened.append(event)
+    return tuple(reopened)
 
 
 def generate_legal_research_moves(
@@ -1557,14 +1658,14 @@ Return only selected_move_id and a short rationale in the required JSON schema.
 Problem-contract inputs define what must be achieved. They are not automatically
 mathematical facts, but do not silently strengthen or weaken their stated requirements.
 Generated proof obligations are research hypotheses about what must be shown and may
-be unnecessary. The current proof-obligation decomposition is provisional.
+be bypassable on another route. The current proof-obligation decomposition is provisional.
 Consider reframe when an obligation may be stronger than the actual contract, encode
 only one sufficient route, accumulate construction/testing without approaching the
 parent goal, or be avoidable through another mechanism allowed by the specification.
 Distinguish "this would be sufficient" from "this is logically necessary". Selecting
 reframe requests a bounded scientific audit; it does NOT declare an obligation
-unnecessary. Do not invent requirements absent from the contract or automatically
-prefer reframe.
+universally unnecessary. A bypass is reversible if its alternative route fails.
+Do not invent requirements absent from the contract or automatically prefer reframe.
 
 Recent progress telemetry distinguishes:
 - closure: a branch/candidate/obligation was actually closed or challenged;
@@ -1665,32 +1766,47 @@ Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
     )
     necessity_example = "not_applicable"
     contract_example: list[int] = []
+    audit_example = None
     necessity_instruction = (
         '- For non-reframe operations, necessity_outcome MUST be "not_applicable" '
-        'and necessity_contract_entity_ids MUST be [].'
+        'and necessity_contract_entity_ids MUST be []; necessity_audit MUST be null.'
     )
     if choice.operation == "reframe":
         contract = _problem_contract(context, int(context.workstream["id"]))
-        contract_example = [entity.id for entity in contract]
         necessity_example = "inconclusive"
+        parent = next((entity for entity in contract if entity.body), contract[0])
+        clause = {"entity_id": parent.id, "quote": parent.body}
+        contract_example = [parent.id]
+        audit_example = {"parent_requirement": clause, "contract_clauses": [clause],
+                         "argument": "Explain the current route dependency or concrete alternative here.",
+                         "replacement_obligation_keys": []}
         necessity_instruction = (
-            "For reframe, choose necessary, unnecessary, or inconclusive as necessity_outcome. "
-            "List the non-empty subset of supplied contract input IDs actually used in "
-            "necessity_contract_entity_ids. Return addressed_obligation_ids=[]; an audit "
-            "does not prove the audited obligation. Every replacement proof_obligation must "
-            "reference the target and at least one cited contract entity. An unnecessary "
-            "verdict must emit a finding explaining a concrete alternative route and "
-            "referencing the target and all cited contract entities. It is only a candidate "
-            "for an independent attack; never claim retirement or verification.\n"
+            "For reframe, choose required_on_current_routes, alternative_route_found, or inconclusive. "
+            "List ALL and only materially used contract input IDs in necessity_contract_entity_ids. "
+            "Quote/reason from exact supplied contract bodies, not only the primary goal title "
+            "when a Definition, Assumption, Model, or Technique contains the relevant requirement. "
+            "Return necessity_audit with parent_requirement={entity_id,quote} identifying the exact "
+            "parent contract clause, contract_clauses=[{entity_id,quote},...] for every used input, "
+            "argument explaining the dependency/alternative route, and replacement_obligation_keys "
+            "listing the material_key of EVERY emitted proof_obligation. Quotes must be exact "
+            "nonempty substrings of the cited bodies; parent_requirement must appear in contract_clauses. "
+            "For alternative_route_found expose every unresolved premise as a replacement obligation; "
+            "an empty replacement list asserts that this parent requirement is discharged directly. "
+            "Do not demand a complete protocol for unrelated properties. Return addressed_obligation_ids=[]. "
+            "Every replacement references the target and relevant cited contract inputs. An alternative "
+            "route must emit a finding referencing the target and all cited contract inputs. "
+            "It is a bypass candidate for independent attack, never universal non-necessity or verification.\n"
             "EXACT PROBLEM CONTRACT\n"
             + json.dumps([entity.model_dump() for entity in contract], ensure_ascii=False)
         )
     elif _is_reframe_attack(context, choice):
         necessity_instruction += (
             "\nThis is an independent attack on a necessity-audit finding. Test whether its "
-            "alternative route actually satisfies the original problem contract without the "
+            "alternative route coherently establishes the identified parent requirement under its explicit replacement premises without the "
             "audited obligation. Look for weakened requirements, hidden assumptions, and "
-            "circular reasoning. Do not require the original sufficient route to hold. "
+            "circular reasoning and unrecorded premises. Replacement premises are open proof obligations, "
+            "not assumed facts; do not demand their proof or a complete solution to unrelated properties. "
+            "Do not require the original sufficient route to hold. "
             "Use the existing attack outcomes; this is not a proof-verification call."
         )
     decision = {
@@ -1774,6 +1890,7 @@ Return ONLY strict JSON with exactly this shape:
   "attack_outcome": "{attack_outcome_example}",
   "necessity_outcome": "{necessity_example}",
   "necessity_contract_entity_ids": {json.dumps(contract_example)},
+  "necessity_audit": {json.dumps(audit_example, ensure_ascii=False)},
   "could_not_determine": [],
   "human_judgment_required": false,
   "human_judgment_reason": null
@@ -1817,13 +1934,15 @@ def _validate_step_report(
     allowed_entity_ids = {int(entity["id"]) for entity in context.entities}
     allowed_source_ids = {int(source["id"]) for source in context.sources}
     if choice.operation != "reframe":
-        if report.necessity_outcome != "not_applicable" or report.necessity_contract_entity_ids:
+        if (report.necessity_outcome != "not_applicable" or report.necessity_contract_entity_ids
+                or report.necessity_audit is not None):
             raise ModelOutputError("Only reframe may report a necessity outcome or contract IDs.")
     else:
         if context.workstream is None:
             raise ModelOutputError("Reframe requires a workstream contract.")
         workstream_id = int(context.workstream["id"])
-        contract_ids = {entity.id for entity in _problem_contract(context, workstream_id)}
+        contract_bodies = {entity.id: entity.body for entity in _problem_contract(context, workstream_id)}
+        contract_ids = set(contract_bodies)
         cited = set(report.necessity_contract_entity_ids)
         if (choice.focus_obligation_id != choice.target_entity_id
                 or choice.target_entity_id not in choice.open_obligation_ids
@@ -1832,16 +1951,33 @@ def _validate_step_report(
             raise ModelOutputError("Reframe requires an unaudited generated open obligation.")
         if report.necessity_outcome == "not_applicable" or not cited or not cited <= contract_ids:
             raise ModelOutputError("Reframe requires a necessity outcome and supplied role=input contract IDs.")
+        audit = report.necessity_audit
+        if audit is None:
+            raise ModelOutputError("Reframe requires an inspectable contract-grounded necessity_audit.")
+        if {clause.entity_id for clause in audit.contract_clauses} != cited:
+            raise ModelOutputError("Every materially used contract clause must be explicitly cited.")
+        if audit.parent_requirement not in audit.contract_clauses:
+            raise ModelOutputError("The exact parent requirement must be a cited contract clause.")
+        for clause in audit.contract_clauses:
+            if not clause.quote.strip() or clause.quote not in contract_bodies[clause.entity_id]:
+                raise ModelOutputError("Contract grounding requires exact quotations from the cited input body.")
+        used_by_artifacts = set().union(*(set(a.related_entity_ids) for a in report.artifacts)) & contract_ids
+        if not used_by_artifacts <= cited:
+            raise ModelOutputError("Artifacts reference materially used contract inputs omitted from the audit.")
+        replacement_keys = [a.material_key for a in report.artifacts if a.artifact_type == "proof_obligation"]
+        if (len(set(audit.replacement_obligation_keys)) != len(audit.replacement_obligation_keys)
+                or set(audit.replacement_obligation_keys) != set(replacement_keys)):
+            raise ModelOutputError("Every unresolved replacement premise must name an emitted proof obligation.")
         if report.addressed_obligation_ids:
             raise ModelOutputError("Reframe cannot claim to prove an obligation via addressed_obligation_ids.")
         for artifact in report.artifacts:
             if artifact.artifact_type == "proof_obligation" and not cited.intersection(artifact.related_entity_ids):
                 raise ModelOutputError("Replacement obligations must reference a cited contract entity.")
-        if report.necessity_outcome == "unnecessary" and not any(
+        if report.necessity_outcome == "alternative_route_found" and not any(
             artifact.artifact_type == "finding" and cited <= set(artifact.related_entity_ids)
             for artifact in report.artifacts
         ):
-            raise ModelOutputError("Unnecessary requires a concrete alternative-route finding citing the contract.")
+            raise ModelOutputError("Alternative route requires a concrete finding citing the contract.")
     obligation_ids = set(choice.open_obligation_ids)
     if (
         choice.focus_obligation_id is not None
@@ -2149,7 +2285,7 @@ def _persist_step(
         if choice.operation == "reframe":
             target = choice.target_entity_id
             audit_state = report.necessity_outcome
-            if audit_state == "unnecessary":
+            if audit_state == "alternative_route_found":
                 contract_ids = set(report.necessity_contract_entity_ids)
                 audit_candidates = [entity_id for artifact, entity_id in accepted
                                     if artifact.artifact_type == "finding"
@@ -2157,12 +2293,19 @@ def _persist_step(
                 if not audit_candidates:
                     raise ModelOutputError("No non-duplicate alternative-route finding survived persistence.")
                 candidate_id = audit_candidates[0]
+                assert report.necessity_audit is not None
+                replacements = sorted(entity_id for artifact, entity_id in accepted
+                                      if artifact.artifact_type == "proof_obligation")
+                if len(replacements) != len(report.necessity_audit.replacement_obligation_keys):
+                    raise ModelOutputError("Every replacement premise must survive duplicate filtering.")
                 set_attribute(con, candidate_id, "research_reframe_target_obligation_id", str(target))
+                set_attribute(con, candidate_id, "research_bypass_replacement_obligation_ids", json.dumps(replacements))
+                set_attribute(con, candidate_id, "research_necessity_audit", report.necessity_audit.model_dump_json())
                 set_attribute(con, candidate_id, "research_necessity_contract_entity_ids",
                               json.dumps(report.necessity_contract_entity_ids))
                 set_attribute(con, target, "research_reframe_candidate_id", str(candidate_id))
                 set_attribute(con, target, "research_obligation_state", "reframe_pending_attack")
-                audit_state = "unnecessary_candidate"
+                audit_state = "bypass_candidate"
             set_attribute(con, target, "research_necessity_audit_state", audit_state)
             set_attribute(con, target, "research_necessity_audit_iteration_id", str(iteration_id))
 
@@ -2196,15 +2339,21 @@ def _persist_step(
                 model=model,
             )
             if _is_reframe_attack(context, choice):
-                # A necessity candidate is not a proof of the original obligation.
-                # Only this exact, pending finding can authorize retirement.
-                can_retract = (report.attack_outcome == "no_critical_issue"
+                # Only the independently tested route can activate a reversible bypass.
+                can_bypass = (report.attack_outcome == "no_critical_issue"
                                and not _candidate_has_unresolved_critical_issue(context, choice.target_entity_id))
                 set_attribute(con, choice.focus_obligation_id, "research_obligation_state",
-                              "unnecessary" if can_retract else "open")
+                              "bypassed" if can_bypass else "open")
                 set_attribute(con, choice.focus_obligation_id, "research_necessity_audit_state",
-                              "unnecessary" if can_retract else
+                              "bypassed" if can_bypass else
                               "challenged" if report.attack_outcome == "critical_issue" else "inconclusive")
+                if can_bypass:
+                    routes = set(_stored_id_set(_attribute(context, choice.focus_obligation_id,
+                                                        "research_bypass_candidate_ids")))
+                    routes.add(choice.target_entity_id)
+                    set_attribute(con, choice.focus_obligation_id, "research_bypass_candidate_ids",
+                                  json.dumps(sorted(routes)))
+                    set_attribute(con, choice.target_entity_id, "research_bypass_activated_iteration_id", str(iteration_id))
             elif choice.focus_obligation_id is not None:
                 obligation_state = "challenged"
                 if report.attack_outcome == "no_critical_issue":
@@ -2239,7 +2388,8 @@ def _persist_step(
             """,
             (json.dumps(artifact_ids), duplicate_count, report.attack_outcome,
              report.necessity_outcome, json.dumps(report.necessity_contract_entity_ids),
-             report.summary if choice.operation == "reframe" else None, iteration_id),
+             json.dumps({"summary": report.summary, "audit": report.necessity_audit.model_dump()}, ensure_ascii=False)
+             if choice.operation == "reframe" else None, iteration_id),
         )
 
     return PersistedStep(
@@ -2302,9 +2452,17 @@ def build_progress_record(
     if (_is_reframe_attack(context_before, choice)
             and choice.focus_obligation_id in before_open
             and choice.focus_obligation_id not in after_open
-            and _attribute(context_after, choice.focus_obligation_id, "research_obligation_state") == "unnecessary"):
-        events.append(ProgressEvent(kind="obligation_retracted", entity_ids=(choice.target_entity_id,),
+            and _attribute(context_after, choice.focus_obligation_id, "research_obligation_state") == "bypassed"):
+        events.append(ProgressEvent(kind="obligation_bypassed", entity_ids=(choice.target_entity_id,),
                                     obligation_ids=(choice.focus_obligation_id,)))
+
+    for obligation_id in sorted(after_open):
+        before_log = _attribute(context_before, obligation_id, "research_bypass_reactivation_events")
+        after_log = _attribute(context_after, obligation_id, "research_bypass_reactivation_events")
+        if (after_log and before_log != after_log
+                and _attribute(context_after, obligation_id, "research_necessity_audit_state") == "reactivated"):
+            events.append(ProgressEvent(kind="obligation_reactivated", entity_ids=(obligation_id,),
+                                        obligation_ids=(obligation_id,)))
 
     for artifact in persisted.accepted_artifacts:
         entity_id = artifact.entity_id
@@ -2487,6 +2645,7 @@ def research(
     providers: dict[str, Provider] = {}
 
     while calls_made < max_calls:
+        reactivate_bypassed_obligations(workstream_id)
         full_context = for_workstream(workstream_id)
         history = _history(workstream_id)
         if _all_branches_terminal(
@@ -2618,6 +2777,7 @@ def research(
                 context=full_context,
                 report=report,
             )
+            reactivate_bypassed_obligations(workstream_id)
             full_context_after = for_workstream(workstream_id)
             progress = build_progress_record(
                 context_before=full_context, context_after=full_context_after,
