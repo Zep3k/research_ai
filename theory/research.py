@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import re
 from collections.abc import Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Literal
 
@@ -21,6 +23,7 @@ from .graph import (
 )
 from .jsonutil import parse_json_model
 from .model_calls import budget_guard, call_model
+from .paths import STATE_DIR
 from .providers import Provider, get_model_spec, get_provider
 from .research_context import ResearchContext, focus_research_context, for_workstream
 from .research_progress import (
@@ -31,6 +34,13 @@ from .research_progress import (
 STRATEGIST_MAX_OUTPUT_TOKENS = 1500
 RESEARCH_MAX_OUTPUT_TOKENS = 12_000
 MAX_CONTROLLER_CALLS = 20
+INTERRUPTED_ITERATION_ERROR = (
+    "Interrupted before controller completion; reconciled as abandoned before a new "
+    "research invocation."
+)
+INTERRUPTED_API_CALL_ERROR = (
+    "Interrupted provider request; reconciled as abandoned before a new research invocation."
+)
 OPERATIONS = ("develop", "attack", "synthesize", "prove", "reframe")
 ROOT_TARGET_TYPES = {
     "Conjecture",
@@ -2609,11 +2619,55 @@ def _finalize(
         )
 
 
+@contextmanager
+def _research_controller_lock(workstream_id: int):
+    """Prevent two local controller processes from owning one workstream."""
+    lock_path = STATE_DIR / f"research-{workstream_id}.lock"
+    try:
+        handle = lock_path.open("a+", encoding="utf-8")
+    except OSError as exc:
+        raise TheoryError(f"Cannot open research controller lock {lock_path}: {exc}") from exc
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise TheoryError(
+                f"Research controller for workstream #{workstream_id} is already active."
+            ) from exc
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
+def _reconcile_stale_research(workstream_id: int) -> tuple[int, int]:
+    """Close interrupted local rows without touching scientific state or telemetry."""
+    completed_at = utcnow()
+    with connect() as con:
+        iterations = con.execute(
+            """
+            UPDATE research_iterations
+            SET status='error',material_progress=0,error_message=?,completed_at=?
+            WHERE workstream_id=? AND status='running'
+            """,
+            (INTERRUPTED_ITERATION_ERROR, completed_at, workstream_id),
+        ).rowcount
+        calls = con.execute(
+            """
+            UPDATE api_calls SET status='failed',error_message=?
+            WHERE workstream_id=? AND status='started'
+            """,
+            (INTERRUPTED_API_CALL_ERROR, workstream_id),
+        ).rowcount
+    return iterations, calls
+
+
 def research(
     workstream_id: int, provider_name: str = "auto", *, max_calls: int,
     strategy: Literal["auto", "off"] = "auto",
 ) -> ResearchOutcome:
-    """Run at most max_calls executions, each preceded by at most one strategy call."""
     if not 1 <= max_calls <= MAX_CONTROLLER_CALLS:
         raise TheoryError(
             f"max_calls must be between 1 and {MAX_CONTROLLER_CALLS}."
@@ -2623,7 +2677,17 @@ def research(
     cfg = Config.load()
     if provider_name not in {"auto", "openai", "anthropic"}:
         raise ConfigurationError(f"Unknown provider override: {provider_name}")
+    with _research_controller_lock(workstream_id):
+        return _run_research(
+            workstream_id, provider_name, max_calls=max_calls, strategy=strategy, cfg=cfg
+        )
 
+
+def _run_research(
+    workstream_id: int, provider_name: str = "auto", *, max_calls: int,
+    strategy: Literal["auto", "off"] = "auto", cfg: Config,
+) -> ResearchOutcome:
+    """Run at most max_calls executions, each preceded by at most one strategy call."""
     initial_context = for_workstream(workstream_id)
     workstream = initial_context.workstream
     if workstream is None:
@@ -2634,6 +2698,7 @@ def research(
         raise TheoryError(
             f"Research workstream #{workstream_id} is {workstream['status']}, not active."
         )
+    _reconcile_stale_research(workstream_id)
     primary = _primary_target(initial_context, workstream_id)
 
     calls_made = 0

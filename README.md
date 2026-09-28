@@ -312,12 +312,13 @@ After choosing the operation, the pure
 | `develop` | OpenAI `gpt-6-luna` | high |
 | `synthesize` / `prove` | OpenAI `gpt-6-sol` | high |
 | `reframe` (necessity audit) | OpenAI `gpt-6-sol` | high |
-| `attack` without a focus obligation | Anthropic `claude-sonnet-5` | high |
+| `attack` without a focus obligation | OpenAI `gpt-6-sol` | high |
 | `attack` with a focus obligation | Anthropic `claude-opus-5-5` | medium |
+| strategy selection (when needed) | OpenAI `gpt-6-luna` | medium |
 
-Luna is the cheap default worker, Sol handles strong constructive reasoning,
-Sonnet provides the independent normal critic, and Opus handles the independent
-critic whose focused attack can contribute to candidate closure. This is an
+Luna is the cheap default worker, Sol handles constructive reasoning and ordinary
+attacks, and Opus handles the independent critic whose focused attack can contribute
+to candidate closure. This is an
 experimental baseline, not a claim that these models are intrinsically optimal.
 Receipts make its cost and research outcomes available for empirical comparison.
 Routing makes zero API calls. Providers are initialized lazily and reused across
@@ -340,6 +341,8 @@ configs receive the defaults above without rewriting the file. Provider ownershi
 and uncached pricing come only from `MODEL_SPECS`; unpriced models fail before a
 call. GPT-6 Astra and Claude Fable 5.1 have registered prices but are rejected in
 automatic routing and reserved for explicit provider-override evaluations.
+An existing config that explicitly sets `research_attack_model` keeps that value;
+remove the field or change it to `gpt-6-sol` to adopt the new ordinary-attack default.
 
 For controlled single-provider ablations, use `--provider openai` or
 `--provider anthropic`. These force `openai_model` or `anthropic_model` for every
@@ -602,6 +605,17 @@ The controller stops when:
 - the local budget guard refuses the next call.
 
 Success or call-limit completion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Each budget refusal happens before the refused request or its execution iteration is recorded and leaves the workstream active. Any earlier paid strategy receipt is retained. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
+
+Each `research` invocation holds a nonblocking, workstream-scoped lock for its full
+lifetime. A concurrent controller for the same workstream fails before changing state.
+After acquiring the lock and before scheduling, the controller reconciles rows left by
+an interrupted prior process: `running` research iterations become `error` with a fixed
+interruption message and completion timestamp, while `started` API receipts become
+`failed` with a fixed interruption message. Recorded usage, cache, cost, response, and
+prompt-byte telemetry is preserved exactly; missing telemetry remains missing. The
+operation makes no provider call, leaves completed/failed rows unchanged, records no
+scientific progress, and retains the abandoned iteration number so later numbering is
+monotonic.
 
 ## V0.1 compatibility and migration
 

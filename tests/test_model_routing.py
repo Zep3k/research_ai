@@ -31,7 +31,7 @@ ROUTES = [
     ("develop", None, "openai", "gpt-6-luna", "high", "auto:develop"),
     ("synthesize", 9, "openai", "gpt-6-sol", "high", "auto:synthesize"),
     ("prove", 9, "openai", "gpt-6-sol", "high", "auto:prove"),
-    ("attack", None, "anthropic", "claude-sonnet-5", "high", "auto:attack"),
+    ("attack", None, "openai", "gpt-6-sol", "high", "auto:attack"),
     ("attack", 9, "anthropic", "claude-opus-5-5", "medium", "auto:critical_attack"),
 ]
 
@@ -309,9 +309,27 @@ def test_old_workspace_config_loads_new_role_defaults_without_rewrite(monkeypatc
     assert cfg.openai_model == "gpt-5.6-sol"
     assert cfg.research_develop_model == "gpt-6-luna"
     assert cfg.research_synthesize_model == cfg.research_prove_model == "gpt-6-sol"
-    assert cfg.research_attack_model == "claude-sonnet-5"
+    assert cfg.research_attack_model == "gpt-6-sol"
     assert cfg.research_critical_attack_model == "claude-opus-5-5"
     assert path.read_text() == legacy
+
+
+def test_explicit_legacy_attack_model_remains_readable_without_rewrite(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    path = tmp_path / ".theory" / "config.json"
+    configured = json.dumps({
+        "monthly_budget_usd": 15,
+        "openai_model": "gpt-6-sol",
+        "anthropic_model": "claude-opus-5-5",
+        "research_attack_model": "claude-sonnet-5",
+    })
+    path.write_text(configured)
+    cfg = Config.load()
+    assert cfg.research_attack_model == "claude-sonnet-5"
+    assert choose_model_route(OperationChoice("attack", 1, "test"), cfg) == ModelRoute(
+        "anthropic", "claude-sonnet-5", "high", 12_000, "auto:attack"
+    )
+    assert path.read_text() == configured
 
 
 def test_auto_invalid_output_is_a_single_paid_attempt_with_no_escalation(monkeypatch, tmp_path):
