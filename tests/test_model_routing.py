@@ -211,7 +211,11 @@ def test_selected_route_reaches_budget_provider_and_receipts(
     assert initialized == [provider_name]
     request = provider.calls[0]
     assert (request["model"], request["effort"], request["max_output_tokens"]) == (model, effort, 12_000)
-    assert request["response_model"].__name__ == ("ResearchAttackResponse" if operation == "attack" else "ResearchStepReport")
+    expected_response = (
+        "FlatAttackReport" if operation == "attack" and provider_name == "anthropic"
+        else "ResearchAttackResponse" if operation == "attack" else "ResearchStepReport"
+    )
+    assert request["response_model"].__name__ == expected_response
     assert admissions[0][0]["model"] == model
     assert admissions[0][0]["max_output_tokens"] == 12_000
     with connect() as con:

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .config import Config
 from .db import connect, utcnow
@@ -330,10 +330,33 @@ class ResearchAttackResponse(BaseModel):
     report: CriticalAttackReport | InconclusiveAttackReport | NoCriticalIssueAttackReport
 
 
-def _parse_execution_report(text: str, operation: str) -> ResearchStepReport:
-    if operation == "attack":
+class FlatAttackReport(ResearchStepReport):
+    """Anthropic-compatible attack shape; scientific outcome checks remain local."""
+
+    operation: Literal["attack"]
+    attack_outcome: Literal["critical_issue", "inconclusive", "no_critical_issue"]
+    artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
+
+
+def _execution_response_model(operation: str, provider: str) -> type[BaseModel]:
+    if operation != "attack":
+        return ResearchStepReport
+    if provider == "openai":
+        return ResearchAttackResponse
+    if provider == "anthropic":
+        return FlatAttackReport
+    raise ConfigurationError(f"Unknown attack response provider: {provider}")
+
+
+def _parse_execution_report(text: str, response_model: type[BaseModel]) -> ResearchStepReport:
+    if response_model is ResearchAttackResponse:
         return parse_json_model(text, ResearchAttackResponse).report
-    return parse_json_model(text, ResearchStepReport)
+    if response_model is FlatAttackReport:
+        try:
+            return FlatAttackReport.model_validate_json(text)
+        except ValidationError as exc:
+            raise ModelOutputError(f"Model JSON did not match FlatAttackReport: {exc}") from exc
+    return parse_json_model(text, response_model)
 
 
 @dataclass(frozen=True)
@@ -1834,13 +1857,15 @@ def _research_prompt(
 
 
 def _research_prompt_sections(
-    context: ResearchContext, primary: dict, choice: OperationChoice
+    context: ResearchContext, primary: dict, choice: OperationChoice,
+    *, attack_response_format: Literal["variant", "flat"] = "variant",
 ) -> PromptSections:
     return build_research_sections(context, primary, choice, facts=ResearchPromptFacts(
         constructive_continuation=choice.continue_construction,
         primary_synthesis=_is_primary_synthesis(context, choice),
         reframe_attack=_is_reframe_attack(context, choice),
         human_judgment_allowed=_human_judgment_allowed(context, choice),
+        attack_response_format=attack_response_format,
         problem_contract=(
             _problem_contract(context, int(context.workstream["id"]))
             if choice.operation == "reframe" else ()
@@ -2819,8 +2844,11 @@ def _run_research(
             consumed_entity_ids=choice.consumed_entity_ids,
             additional_entity_ids=tuple(use.entity_id for use in choice.idea.exploits) if choice.idea else (),
         )
-        prompt = _research_prompt_sections(model_context, primary, choice).as_prompt_content()
-        response_model = ResearchAttackResponse if choice.operation == "attack" else ResearchStepReport
+        response_model = _execution_response_model(choice.operation, route.provider)
+        prompt = _research_prompt_sections(
+            model_context, primary, choice,
+            attack_response_format="flat" if response_model is FlatAttackReport else "variant",
+        ).as_prompt_content()
         estimated_max_cost = budget_guard(
             cfg,
             model=route.model,
@@ -2863,11 +2891,11 @@ def _run_research(
                 response_model=response_model,
                 effort=route.effort,
                 validate_response=(lambda text: _validate_step_report(
-                    _parse_execution_report(text, choice.operation), model_context, choice,
+                    _parse_execution_report(text, response_model), model_context, choice,
                 )) if choice.operation == "attack" else None,
             )
             calls_made += 1
-            report = _parse_execution_report(result.text, choice.operation)
+            report = _parse_execution_report(result.text, response_model)
             _validate_step_report(report, model_context, choice)
             persisted = _persist_step(
                 iteration_id=iteration_id,

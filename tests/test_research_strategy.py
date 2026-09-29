@@ -86,7 +86,9 @@ class StrategyProvider:
                 assert con.execute("SELECT COUNT(*) FROM research_iterations WHERE status='running'").fetchone()[0] == 0
             payload = self.select(json.loads(kwargs["prompt"].split("RESEARCH STATE\n", 1)[1]))
         else:
-            assert kwargs["response_model"].__name__ in {"ResearchStepReport", "ResearchAttackResponse"}
+            assert kwargs["response_model"].__name__ in {
+                "ResearchStepReport", "ResearchAttackResponse", "FlatAttackReport",
+            }
             self.executions += 1
             payload = self.execute(decision_from_prompt(kwargs["prompt"]), self.executions)
         if kwargs["response_model"].__name__ == "ResearchAttackResponse" and isinstance(payload, dict):

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .prompts import PromptContent
 
@@ -53,6 +53,7 @@ class ResearchPromptFacts:
     reframe_attack: bool = False
     human_judgment_allowed: bool = False
     problem_contract: tuple[ProblemContractBrief, ...] = ()
+    attack_response_format: Literal["variant", "flat"] = "variant"
 
 
 STRATEGIST_GLOBAL_INSTRUCTIONS = """You select the next bounded research move; do not solve the research problem.
@@ -548,7 +549,7 @@ Do not mark existing obligations resolved merely because a new branch exists.
   "human_judgment_reason": null
 }}''',
     )
-    if choice.operation == "attack":
+    if choice.operation == "attack" and facts.attack_response_format == "variant":
         # Keep a root object for provider schema compatibility; variants live inside it.
         label, example = sections.output_example.split("\n", 1)
         sections = replace(
@@ -557,6 +558,12 @@ Do not mark existing obligations resolved merely because a new branch exists.
             output_contract=(*sections.output_contract,
                 'Return an object with exactly one "report" field. Its attack_outcome selects '
                 'the critical_issue, inconclusive, or no_critical_issue response variant.'),
+        )
+    elif choice.operation == "attack":
+        sections = replace(
+            sections,
+            output_contract=(*sections.output_contract,
+                'Return the attack fields at the JSON root; do not wrap them in "report".'),
         )
     return sections
 

@@ -333,9 +333,11 @@ The research output cap is **12,000 tokens**, used for both budget admission and
 the provider request. Reports should be concise; the cap is an execution budget,
 not a guarantee that every theoretical maximum-length valid report fits. Truncated
 or invalid output fails the iteration without a repair call or escalation.
-Both providers receive a schema derived from `ResearchStepReport`. Anthropic uses
-`output_config.format` with the SDK's schema conversion helper; the complete local
-Pydantic and scientific validations still run after recording usage. This requires
+OpenAI attack calls use the nested outcome-specific `ResearchAttackResponse` schema.
+Anthropic attack calls use a flat `FlatAttackReport` schema to keep its compiled grammar
+small; both pass the same local scientific validation. Non-attack calls retain
+`ResearchStepReport`. Anthropic uses `output_config.format` with the SDK's schema
+conversion helper. This requires
 `anthropic>=1.8.0` (upgrade dependencies with `pip install -e '.[dev]'`).
 
 Role models are configurable through `research_develop_model`, `research_idea_develop_model`,

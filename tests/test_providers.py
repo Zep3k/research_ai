@@ -5,7 +5,7 @@ import pytest
 
 from theory.jsonutil import parse_json_model
 from theory.providers import AnthropicProvider, OpenAIProvider
-from theory.research import ResearchStepReport
+from theory.research import FlatAttackReport, ResearchStepReport
 
 
 class CaptureCreate:
@@ -157,7 +157,8 @@ def test_anthropic_adapter_passes_effort_and_hard_output_cap():
     assert result.text == "answer"
 
 
-def test_anthropic_structured_report_preserves_effort_and_artifact_variants():
+@pytest.mark.parametrize("response_model", (ResearchStepReport, FlatAttackReport))
+def test_anthropic_structured_report_preserves_selected_schema(response_model):
     report = {
         "operation": "attack", "target_entity_id": 1, "summary": "Bounded attack.",
         "artifacts": [], "consumed_entity_ids": [], "addressed_obligation_ids": [],
@@ -173,7 +174,7 @@ def test_anthropic_structured_report_preserves_effort_and_artifact_variants():
 
     result = provider.complete(
         model="claude-opus-5-5", prompt="question", effort="medium",
-        max_output_tokens=12_000, response_model=ResearchStepReport,
+        max_output_tokens=12_000, response_model=response_model,
     )
 
     assert capture.calls == 1
@@ -183,14 +184,19 @@ def test_anthropic_structured_report_preserves_effort_and_artifact_variants():
     assert output_format["type"] == "json_schema"
     schema = output_format["schema"]
     assert schema["additionalProperties"] is False
-    assert "anyOf" in schema["properties"]["artifacts"]["items"]
-    for variant, tag in (
-        ("ObstructionResearchArtifact", "obstruction"),
-        ("FailedApproachResearchArtifact", "failed_approach"),
-    ):
-        assert schema["$defs"][variant]["properties"]["artifact_type"]["enum"] == [tag]
-        assert schema["$defs"][variant]["additionalProperties"] is False
-    assert parse_json_model(result.text, ResearchStepReport).attack_outcome == "no_critical_issue"
+    assert "report" not in schema["properties"]
+    if response_model is FlatAttackReport:
+        assert "anyOf" not in schema["properties"]["artifacts"]["items"]
+        assert set(schema["$defs"]) == {"ResearchArtifact", "NecessityAudit", "ContractClause"}
+    else:
+        assert "anyOf" in schema["properties"]["artifacts"]["items"]
+        for variant, tag in (
+            ("ObstructionResearchArtifact", "obstruction"),
+            ("FailedApproachResearchArtifact", "failed_approach"),
+        ):
+            assert schema["$defs"][variant]["properties"]["artifact_type"]["enum"] == [tag]
+            assert schema["$defs"][variant]["additionalProperties"] is False
+    assert parse_json_model(result.text, response_model).attack_outcome == "no_critical_issue"
     assert result.cost_usd == pytest.approx(0.0044)
 
 
