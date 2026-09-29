@@ -535,7 +535,9 @@ def choose_model_route(
         )
 
     role = choice.operation
-    if role == "attack" and choice.focus_obligation_id is not None:
+    if role == "develop" and choice.idea is not None:
+        role = "idea_develop"
+    elif role == "attack" and choice.focus_obligation_id is not None:
         role = "critical_attack"
     model = getattr(cfg, f"research_{role}_model")
     spec = get_model_spec(model)

@@ -312,6 +312,7 @@ After choosing the operation, the pure
 | Operation | Model | Effort |
 | --- | --- | --- |
 | `develop` | OpenAI `gpt-6-luna` | high |
+| `develop` with a strategist-selected transient idea | OpenAI `gpt-6-sol` | high |
 | `synthesize` / `prove` | OpenAI `gpt-6-sol` | high |
 | `reframe` (necessity audit) | OpenAI `gpt-6-sol` | high |
 | `attack` without a focus obligation | OpenAI `gpt-6-sol` | high |
@@ -337,7 +338,7 @@ Both providers receive a schema derived from `ResearchStepReport`. Anthropic use
 Pydantic and scientific validations still run after recording usage. This requires
 `anthropic>=1.8.0` (upgrade dependencies with `pip install -e '.[dev]'`).
 
-Role models are configurable through `research_develop_model`,
+Role models are configurable through `research_develop_model`, `research_idea_develop_model`,
 `research_synthesize_model`, `research_prove_model`, `research_attack_model`, and
 `research_critical_attack_model`, plus `research_reframe_model`, in `.theory/config.json`. Missing fields in old
 configs receive the defaults above without rewriting the file. Provider ownership

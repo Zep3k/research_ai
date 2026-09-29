@@ -107,6 +107,17 @@ def test_case02b_exposes_selects_and_executes_simplification_with_provenance(cas
     assert trace["planning"]["selected_idea_id"] == "propagate_conflict"
     assert trace["planning"]["trigger"] == "concrete_refutation"
     assert trace["model"] == Config.load().research_ideation_model
+    execution_requests = [r for r in provider.requests if r["response_model"].__name__ == "ResearchStepReport"]
+    assert [r["model"] for r in execution_requests] == ["gpt-6-sol", "gpt-6-luna"]
+    assert all(r["max_output_tokens"] == 12_000 for r in execution_requests)
+    with connect() as con:
+        execution_calls = [dict(r) for r in con.execute(
+            "SELECT model,purpose,estimated_max_cost_usd,status FROM api_calls "
+            "WHERE purpose='research:develop' ORDER BY id"
+        )]
+    assert [r["model"] for r in execution_calls] == ["gpt-6-sol", "gpt-6-luna"]
+    assert all(r["purpose"] == "research:develop" and r["estimated_max_cost_usd"] > 0
+               and r["status"] == "completed" for r in execution_calls)
     assert trace["input_tokens"] == 10 and trace["cost_usd"] == 0.002
     assert len(trace["generated_ideas"]) == 3
     assert all(e["trust_state"] == "quarantined" for e in context.entities if e["id"] in result.artifact_ids)
@@ -127,6 +138,8 @@ def test_strategist_can_decline_all_ideas(case02b, monkeypatch):
     assert len(provider.offered[0]) > len(batch["ideas"])
     assert ideation_telemetry(wa[0])[0]["planning"]["selected_idea_id"] is None
     assert all("research_selected_idea" not in a for a in for_workstream(wa[0]).attributes.values())
+    execution = next(r for r in provider.requests if r["response_model"].__name__ == "ResearchStepReport")
+    assert execution["model"] == "gpt-6-luna"
 
 
 @pytest.mark.parametrize("option", ("off", "forced", "one_call"))

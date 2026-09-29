@@ -17,6 +17,7 @@ from theory.research import (
     choose_model_route,
     research,
 )
+from theory.research_ideation import CandidateIdea, IdeaUse
 from test_research import (
     DynamicProvider,
     add_linked_research_entity,
@@ -34,6 +35,15 @@ ROUTES = [
     ("attack", None, "openai", "gpt-6-sol", "high", "auto:attack"),
     ("attack", 9, "anthropic", "claude-opus-5-5", "medium", "auto:critical_attack"),
 ]
+
+
+def transient_idea() -> CandidateIdea:
+    return CandidateIdea(
+        idea_id="candidate_route", mechanism="Test a provisional alternate route.",
+        exploits=[IdeaUse(entity_id=1, exploitation="Uses the supplied contract.")],
+        route_change="Replace the current unsupported premise.",
+        main_risk="The replacement may introduce another premise.",
+    )
 
 
 @pytest.mark.parametrize("operation,focus,provider,model,effort,rationale", ROUTES)
@@ -54,15 +64,33 @@ def test_exact_routes_are_pure_and_deterministic(
     assert RESEARCH_MAX_OUTPUT_TOKENS == 12_000
 
 
+def test_selected_idea_develop_uses_its_own_configured_role():
+    cfg = Config(research_develop_model="gpt-6-luna",
+                 research_idea_develop_model="claude-sonnet-5")
+    ordinary = OperationChoice("develop", 1, "Continue ordinary development")
+    selected_idea = OperationChoice("develop", 1, "Explore selected idea", idea=transient_idea())
+    assert choose_model_route(ordinary, cfg) == ModelRoute(
+        "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+    )
+    assert choose_model_route(selected_idea, cfg) == ModelRoute(
+        "anthropic", "claude-sonnet-5", "high", 12_000, "auto:idea_develop"
+    )
+    assert choose_model_route(selected_idea, Config()) == ModelRoute(
+        "openai", "gpt-6-sol", "high", 12_000, "auto:idea_develop"
+    )
+
+
 @pytest.mark.parametrize("override,model", [
     ("openai", "gpt-5.6-terra"), ("anthropic", "claude-sonnet-5"),
 ])
 def test_forced_provider_uses_single_configured_model_for_every_operation(override, model):
     cfg = Config(**{f"{override}_model": model})
-    for operation, focus, *_ in ROUTES:
+    choices = [OperationChoice(operation, 1, "test", focus_obligation_id=focus)
+               for operation, focus, *_ in ROUTES]
+    choices.append(OperationChoice("develop", 1, "test", idea=transient_idea()))
+    for choice in choices:
         route = choose_model_route(
-            OperationChoice(operation, 1, "test", focus_obligation_id=focus),
-            cfg, provider_override=override,
+            choice, cfg, provider_override=override,
         )
         assert route == ModelRoute(override, model, "high", 12_000, f"forced:{override}")
 
@@ -309,6 +337,7 @@ def test_old_workspace_config_loads_new_role_defaults_without_rewrite(monkeypatc
     cfg = Config.load()
     assert cfg.openai_model == "gpt-5.6-sol"
     assert cfg.research_develop_model == "gpt-6-luna"
+    assert cfg.research_idea_develop_model == "gpt-6-sol"
     assert cfg.research_synthesize_model == cfg.research_prove_model == "gpt-6-sol"
     assert cfg.research_attack_model == "gpt-6-sol"
     assert cfg.research_critical_attack_model == "claude-opus-5-5"
