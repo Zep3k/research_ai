@@ -5,7 +5,7 @@ import pytest
 
 from theory.jsonutil import parse_json_model
 from theory.providers import AnthropicProvider, OpenAIProvider
-from theory.research import FlatAttackReport, ResearchStepReport
+from theory.research import FlatAttackReport, ResearchStepReport, _parse_execution_report
 
 
 class CaptureCreate:
@@ -165,6 +165,8 @@ def test_anthropic_structured_report_preserves_selected_schema(response_model):
         "attack_outcome": "no_critical_issue", "could_not_determine": [],
         "human_judgment_required": False, "human_judgment_reason": None,
     }
+    if response_model is FlatAttackReport:
+        report.pop("attack_outcome")
     capture = CaptureCreate(SimpleNamespace(
         content=[SimpleNamespace(type="text", text=json.dumps(report))],
         usage=SimpleNamespace(input_tokens=100, output_tokens=200),
@@ -187,6 +189,7 @@ def test_anthropic_structured_report_preserves_selected_schema(response_model):
     assert "report" not in schema["properties"]
     if response_model is FlatAttackReport:
         assert "anyOf" not in schema["properties"]["artifacts"]["items"]
+        assert "attack_outcome" not in schema["properties"]
         assert set(schema["$defs"]) == {"ResearchArtifact"}
     else:
         assert "anyOf" in schema["properties"]["artifacts"]["items"]
@@ -196,7 +199,7 @@ def test_anthropic_structured_report_preserves_selected_schema(response_model):
         ):
             assert schema["$defs"][variant]["properties"]["artifact_type"]["enum"] == [tag]
             assert schema["$defs"][variant]["additionalProperties"] is False
-    assert parse_json_model(result.text, response_model).attack_outcome == "no_critical_issue"
+    assert _parse_execution_report(result.text, response_model).attack_outcome == "no_critical_issue"
     assert result.cost_usd == pytest.approx(0.0044)
 
 

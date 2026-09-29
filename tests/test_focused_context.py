@@ -158,9 +158,11 @@ def test_research_rejects_reference_to_omitted_entity_at_execution_boundary(bran
     workstream, ids, _, _, _ = branches
     def respond(decision, _):
         assert decision["operation"] == "attack"
-        return step_report(decision, [artifact(
+        report = step_report(decision, [artifact(
             "obstruction", "A critical gap.", "critical_gap", [ids["proof_a"], ids["lemma_b"]], branch_status="blocked",
         )], attack_outcome="critical_issue")
+        report.pop("attack_outcome")
+        return report
     provider = DynamicProvider(respond)
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
     with pytest.raises(ModelOutputError, match="unknown/out-of-context"):
@@ -199,7 +201,11 @@ def test_attack_closure_receives_full_context_and_other_obligations_stay_open(br
         assert {entity["id"] for entity in context.entities} == {entity["id"] for entity in full.entities}
         return original(context, candidate_id, obligation_id)
     monkeypatch.setattr(controller, "_candidate_can_complete_obligation_after_attack", check)
-    provider = DynamicProvider(lambda decision, _: step_report(decision, [], attack_outcome="no_critical_issue"))
+    def respond(decision, _):
+        report = step_report(decision, [], attack_outcome="no_critical_issue")
+        report.pop("attack_outcome")
+        return report
+    provider = DynamicProvider(respond)
     monkeypatch.setattr(controller, "get_provider", lambda _: provider)
     outcome = research(workstream, max_calls=1, strategy="off")
     assert checked == [ids["proof_a"]]

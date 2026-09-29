@@ -193,7 +193,11 @@ def test_selected_route_reaches_budget_provider_and_receipts(
     def responder(decision, _):
         assert decision["operation"] == operation
         if operation == "attack":
-            return step_report(decision, [], attack_outcome="inconclusive", unresolved=["Boundary case"])
+            report = step_report(decision, [], attack_outcome="inconclusive",
+                                 unresolved=["Boundary case"])
+            if provider_name == "anthropic":
+                report.pop("attack_outcome")
+            return report
         if operation == "prove":
             return step_report(decision, [artifact(
                 "proof_attempt", "Candidate overlap argument", "overlap_candidate",
@@ -270,7 +274,9 @@ def test_mixed_run_lazily_caches_providers_and_records_actual_review_model(monke
                 "pigeonhole_certificate_argument", [decision["target_entity_id"], obligation],
             )], addressed=[obligation])
         assert operation == "attack"
-        return step_report(decision, [], attack_outcome="no_critical_issue")
+        report = step_report(decision, [], attack_outcome="no_critical_issue")
+        report.pop("attack_outcome")
+        return report
 
     providers = {name: PricedProvider(responder) for name in ("openai", "anthropic")}
     initialized = []

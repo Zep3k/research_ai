@@ -94,6 +94,8 @@ class StrategyProvider:
             payload = self.execute(decision_from_prompt(kwargs["prompt"]), self.executions)
         if kwargs["response_model"].__name__ == "ResearchAttackResponse" and isinstance(payload, dict):
             payload = {"report": payload}
+        elif kwargs["response_model"].__name__ == "FlatAttackReport" and isinstance(payload, dict):
+            payload.pop("attack_outcome", None)
         return ModelResult(
             text=payload if isinstance(payload, str) else json.dumps(payload),
             input_tokens=500, output_tokens=80, uncached_input_tokens=400,

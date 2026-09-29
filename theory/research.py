@@ -330,18 +330,22 @@ class ResearchAttackResponse(BaseModel):
     report: CriticalAttackReport | InconclusiveAttackReport | NoCriticalIssueAttackReport
 
 
-class FlatAttackReport(ResearchStepReport):
-    """Anthropic-compatible attack shape; scientific outcome checks remain local."""
+class FlatAttackReport(BaseModel):
+    """Anthropic attack evidence; the controller classifies its outcome locally."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     operation: Literal["attack"]
+    target_entity_id: int = Field(gt=0)
+    summary: str = Field(min_length=1, max_length=4_000)
+    artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
     consumed_entity_ids: list[int] = Field(
         default_factory=list, max_length=0,
     )
     addressed_obligation_ids: list[int] = Field(
         default_factory=list, max_length=0,
     )
-    attack_outcome: Literal["critical_issue", "inconclusive", "no_critical_issue"]
-    artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
+    could_not_determine: list[str] = Field(default_factory=list, max_length=12)
     necessity_outcome: Literal["not_applicable"] = "not_applicable"
     necessity_contract_entity_ids: list[int] = Field(
         default_factory=list, max_length=0,
@@ -349,6 +353,19 @@ class FlatAttackReport(ResearchStepReport):
     necessity_audit: Literal[None] = None
     human_judgment_required: Literal[False]
     human_judgment_reason: Literal[None]
+
+    @field_validator("summary")
+    @classmethod
+    def strip_summary(cls, value: str) -> str:
+        return _strip_nonempty(value)
+
+    @field_validator("could_not_determine")
+    @classmethod
+    def clean_unresolved(cls, values: list[str]) -> list[str]:
+        cleaned = [value.strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("could_not_determine entries cannot be blank")
+        return cleaned
 
 
 def _execution_response_model(operation: str, provider: str) -> type[BaseModel]:
@@ -366,7 +383,17 @@ def _parse_execution_report(text: str, response_model: type[BaseModel]) -> Resea
         return parse_json_model(text, ResearchAttackResponse).report
     if response_model is FlatAttackReport:
         try:
-            return FlatAttackReport.model_validate_json(text)
+            evidence = FlatAttackReport.model_validate_json(text)
+            if any(artifact.artifact_type in CRITICAL_ARTIFACT_TYPES
+                   for artifact in evidence.artifacts):
+                outcome = "critical_issue"
+            elif evidence.could_not_determine:
+                outcome = "inconclusive"
+            else:
+                outcome = "no_critical_issue"
+            return ResearchStepReport.model_validate({
+                **evidence.model_dump(), "attack_outcome": outcome,
+            })
         except ValidationError as exc:
             raise ModelOutputError(f"Model JSON did not match FlatAttackReport: {exc}") from exc
     return parse_json_model(text, response_model)

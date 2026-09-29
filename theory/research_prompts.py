@@ -344,7 +344,15 @@ def build_research_sections(
 ) -> PromptSections:
     payload = context.as_model_payload()
     primary_synthesis = facts.primary_synthesis
-    if choice.operation == "attack":
+    if choice.operation == "attack" and facts.attack_response_format == "flat":
+        attack_outcome_instruction = '''ATTACK EVIDENCE
+Report concrete counterexample, obstruction, or failed_approach artifacts when found.
+Put each material unresolved question in could_not_determine; use [] when none remains.
+The controller derives the attack outcome from these evidence fields: a critical artifact
+takes precedence, then nonempty uncertainty, then no critical issue. Do not provide
+attack_outcome. Finding no critical issue in one bounded attack is not verification.'''
+        attack_outcome_example = None
+    elif choice.operation == "attack":
         attack_outcome_instruction = '''ATTACK OUTCOME PRECEDENCE
 Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
 1. CONCRETE DEFECT FOUND: use "critical_issue". This requires at least one counterexample,
@@ -360,6 +368,10 @@ Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
             '- For non-attack operations, attack_outcome MUST be exactly "not_applicable".'
         )
         attack_outcome_example = "not_applicable"
+    attack_outcome_example_line = (
+        f'  "attack_outcome": "{attack_outcome_example}",\n'
+        if attack_outcome_example is not None else ""
+    )
     required_consumed_entity_ids = list(choice.consumed_entity_ids)
     if choice.operation == "synthesize":
         required_refs = [*choice.consumed_entity_ids, choice.target_entity_id]
@@ -540,8 +552,7 @@ Do not mark existing obligations resolved merely because a new branch exists.
   "artifacts": {artifact_output_example},
   "consumed_entity_ids": {json.dumps(required_consumed_entity_ids)},
   "addressed_obligation_ids": [],
-  "attack_outcome": "{attack_outcome_example}",
-  "necessity_outcome": "{necessity_example}",
+{attack_outcome_example_line}  "necessity_outcome": "{necessity_example}",
   "necessity_contract_entity_ids": {json.dumps(contract_example)},
   "necessity_audit": {json.dumps(audit_example, ensure_ascii=False)},
   "could_not_determine": [],
