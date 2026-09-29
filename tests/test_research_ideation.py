@@ -108,14 +108,14 @@ def test_case02b_exposes_selects_and_executes_simplification_with_provenance(cas
     assert trace["planning"]["trigger"] == "concrete_refutation"
     assert trace["model"] == Config.load().research_ideation_model
     execution_requests = [r for r in provider.requests if r["response_model"].__name__ == "ResearchStepReport"]
-    assert [r["model"] for r in execution_requests] == ["gpt-6-sol", "gpt-6-luna"]
+    assert [r["model"] for r in execution_requests] == ["gpt-6-sol", "gpt-6-sol"]
     assert all(r["max_output_tokens"] == 12_000 for r in execution_requests)
     with connect() as con:
         execution_calls = [dict(r) for r in con.execute(
             "SELECT model,purpose,estimated_max_cost_usd,status FROM api_calls "
             "WHERE purpose='research:develop' ORDER BY id"
         )]
-    assert [r["model"] for r in execution_calls] == ["gpt-6-sol", "gpt-6-luna"]
+    assert [r["model"] for r in execution_calls] == ["gpt-6-sol", "gpt-6-sol"]
     assert all(r["purpose"] == "research:develop" and r["estimated_max_cost_usd"] > 0
                and r["status"] == "completed" for r in execution_calls)
     assert trace["input_tokens"] == 10 and trace["cost_usd"] == 0.002
@@ -127,8 +127,75 @@ def test_case02b_exposes_selects_and_executes_simplification_with_provenance(cas
         iterations = [dict(r) for r in con.execute("SELECT * FROM research_iterations ORDER BY id")]
     assert iterations[0]["selected_move_id"].endswith(":propagate_conflict")
     assert iterations[1]["selection_mode"] == "deterministic_baseline"
+    assert [row["idea_origin"] for row in iterations] == [1, 1]
+    assert all(context.attributes[entity_id]["research_idea_origin"] == "true"
+               for entity_id in result.artifact_ids)
+    assert "research_selected_idea" not in context.attributes[result.artifact_ids[1]]
     assert all(row["operation"] != "ideate" for row in iterations)
     assert result.stop_reason == "max_calls_exhausted"
+
+
+def test_idea_origin_survives_second_continuation_and_resume(case02b, monkeypatch):
+    wa, _, batch = case02b
+    provider = install(monkeypatch, batch)
+    first = research(wa[0], max_calls=2)
+    assert first.calls_made == 2
+    with connect() as con:
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (wa[0],))
+
+    resumed = research(wa[0], strategy="off", max_calls=1)
+    execution = [request for request in provider.requests
+                 if request["response_model"].__name__ == "ResearchStepReport"]
+    assert [request["model"] for request in execution] == ["gpt-6-sol"] * 3
+    assert all(request["max_output_tokens"] == 12_000 for request in execution)
+    assert all("research_idea_origin" not in request["prompt"] for request in provider.requests)
+    assert decision_from_prompt(execution[1]["prompt"]).get("selected_idea") is None
+    assert decision_from_prompt(execution[2]["prompt"]).get("selected_idea") is None
+    with connect() as con:
+        rows = [dict(row) for row in con.execute(
+            "SELECT * FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            (wa[0],),
+        )]
+    assert [row["idea_origin"] for row in rows] == [1, 1, 1]
+    assert all(row["status"] == "completed" for row in rows)
+    context = for_workstream(wa[0])
+    assert context.attributes[resumed.artifact_ids[0]]["research_idea_origin"] == "true"
+    assert "research_selected_idea" not in context.attributes[resumed.artifact_ids[0]]
+
+
+def test_leaving_idea_route_does_not_mark_later_develops(case02b, monkeypatch):
+    wa, _, batch = case02b
+
+    def choose(state):
+        moves = state["legal_moves"]
+        chosen = next((move for move in moves if move["idea"]), None)
+        if chosen is None:
+            chosen = next(move for move in moves if move["operation"] == "develop"
+                          and move["target_entity_id"] == wa[3]
+                          and not move["continue_construction"] and move["idea"] is None)
+        return {"selected_move_id": chosen["move_id"],
+                "rationale": "Explore this offered construction route."}
+
+    provider = install(monkeypatch, batch, select=choose)
+    result = research(wa[0], max_calls=3)
+    execution = [request for request in provider.requests
+                 if request["response_model"].__name__ == "ResearchStepReport"]
+    assert [request["model"] for request in execution] == [
+        "gpt-6-sol", "gpt-6-luna", "gpt-6-luna",
+    ]
+    with connect() as con:
+        rows = [dict(row) for row in con.execute(
+            "SELECT * FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            (wa[0],),
+        )]
+    assert [row["idea_origin"] for row in rows] == [1, 0, 0]
+    assert rows[1]["selected_move_id"].startswith(f"develop:{wa[3]}:")
+    assert not rows[1]["selected_move_id"].endswith(":continue")
+    assert rows[2]["selected_move_id"].endswith(":continue")
+    context = for_workstream(wa[0])
+    assert context.attributes[result.artifact_ids[0]]["research_idea_origin"] == "true"
+    assert all("research_idea_origin" not in context.attributes[entity_id]
+               for entity_id in result.artifact_ids[1:])
 
 
 def test_strategist_can_decline_all_ideas(case02b, monkeypatch):
@@ -316,6 +383,33 @@ def test_v11_call_log_migration_preserves_old_receipts(monkeypatch, tmp_path):
             row = con.execute("SELECT * FROM api_calls").fetchone()
             assert tuple(row[k] for k in columns) == before
             assert row["planning_metadata_json"] is None
+
+
+def test_v12_idea_route_backfill_preserves_continuation_after_resume(case02b, monkeypatch):
+    wa, _, batch = case02b
+    provider = install(monkeypatch, batch)
+    research(wa[0], max_calls=2)
+    with sqlite3.connect(".theory/research.db") as con:
+        con.execute("ALTER TABLE research_iterations DROP COLUMN idea_origin")
+        con.execute("PRAGMA user_version=12")
+
+    with connect() as con:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert [row[0] for row in con.execute(
+            "SELECT idea_origin FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            (wa[0],),
+        )] == [1, 1]
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (wa[0],))
+
+    research(wa[0], strategy="off", max_calls=1)
+    execution = [request for request in provider.requests
+                 if request["response_model"].__name__ == "ResearchStepReport"]
+    assert [request["model"] for request in execution] == ["gpt-6-sol"] * 3
+    with connect() as con:
+        assert [row[0] for row in con.execute(
+            "SELECT idea_origin FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            (wa[0],),
+        )] == [1, 1, 1]
 
 
 def test_unoffered_idea_selection_fails_without_execution(case02b, monkeypatch):

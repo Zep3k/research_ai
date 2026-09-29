@@ -80,6 +80,25 @@ def test_selected_idea_develop_uses_its_own_configured_role():
     )
 
 
+def test_idea_origin_continuation_routes_without_replaying_idea():
+    cfg = Config(research_develop_model="gpt-6-luna",
+                 research_idea_develop_model="claude-sonnet-5")
+    continuation = OperationChoice(
+        "develop", 1, "Continue unfinished construction",
+        continue_construction=True, idea_origin=True,
+    )
+    ordinary_continuation = OperationChoice(
+        "develop", 1, "Continue ordinary construction", continue_construction=True,
+    )
+    assert continuation.idea is None
+    assert choose_model_route(continuation, cfg) == ModelRoute(
+        "anthropic", "claude-sonnet-5", "high", 12_000, "auto:idea_develop"
+    )
+    assert choose_model_route(ordinary_continuation, cfg) == ModelRoute(
+        "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+    )
+
+
 @pytest.mark.parametrize("override,model", [
     ("openai", "gpt-5.6-terra"), ("anthropic", "claude-sonnet-5"),
 ])
@@ -88,6 +107,8 @@ def test_forced_provider_uses_single_configured_model_for_every_operation(overri
     choices = [OperationChoice(operation, 1, "test", focus_obligation_id=focus)
                for operation, focus, *_ in ROUTES]
     choices.append(OperationChoice("develop", 1, "test", idea=transient_idea()))
+    choices.append(OperationChoice("develop", 1, "test", continue_construction=True,
+                                   idea_origin=True))
     for choice in choices:
         route = choose_model_route(
             choice, cfg, provider_override=override,

@@ -82,7 +82,12 @@ class ResearchContext:
             ],
             "workstream": self.workstream,
             "target_entity": self.target_entity,
-            "attributes_by_entity_id": self.attributes,
+            # Execution routing provenance stays in the graph for audit, not model context.
+            "attributes_by_entity_id": {
+                entity_id: {key: value for key, value in attrs.items()
+                            if key != "research_idea_origin"}
+                for entity_id, attrs in self.attributes.items()
+            },
             "sources": self.sources,
             "workstream_links": self.workstream_links,
             "selections": self.selections,

@@ -9,7 +9,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 RESEARCH_NECESSITY_COLUMNS = {
     "necessity_outcome": "TEXT",
@@ -314,6 +314,7 @@ CREATE TABLE IF NOT EXISTS research_iterations (
     strategy_provider TEXT,
     strategy_model TEXT,
     focus_obligation_id INTEGER,
+    idea_origin INTEGER NOT NULL DEFAULT 0 CHECK (idea_origin IN (0,1)),
     necessity_outcome TEXT,
     necessity_contract_entity_ids_json TEXT,
     necessity_audit_summary TEXT,
@@ -971,6 +972,29 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
         _migrate_iterations_v11(con)
     if version < 12:
         _add_column(con, "api_calls", "planning_metadata_json TEXT")
+    if version < 13:
+        _add_column(con, "research_iterations",
+                    "idea_origin INTEGER NOT NULL DEFAULT 0 CHECK (idea_origin IN (0,1))")
+        # Selected ideas already have durable move IDs. Carry that provenance
+        # through completed historical continuations, ignoring failed attempts.
+        previous: dict[int, tuple[int, bool]] = {}
+        for row in tuple(con.execute(
+            "SELECT id,workstream_id,status,operation,target_entity_id,selected_move_id "
+            "FROM research_iterations ORDER BY workstream_id,iteration_number"
+        )):
+            if row["status"] != "completed":
+                continue
+            workstream_id = int(row["workstream_id"])
+            target_id = int(row["target_entity_id"])
+            move_id = row["selected_move_id"] or ""
+            prior = previous.get(workstream_id)
+            idea_origin = row["operation"] == "develop" and (
+                ":idea:" in move_id
+                or (move_id.endswith(":continue") and prior == (target_id, True))
+            )
+            if idea_origin:
+                con.execute("UPDATE research_iterations SET idea_origin=1 WHERE id=?", (row["id"],))
+            previous[workstream_id] = (target_id, idea_origin)
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -994,6 +1018,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 10, "research_progress_metrics")
     _record_migration(con, 11, "obligation_reframing")
     _record_migration(con, 12, "research_ideation_call_metadata")
+    _record_migration(con, 13, "research_idea_origin_route")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -1033,6 +1058,8 @@ def initialize(name: str) -> None:
         _record_migration(con, 9, "research_strategy_selection")
         _record_migration(con, 10, "research_progress_metrics")
         _record_migration(con, 11, "obligation_reframing")
+        _record_migration(con, 12, "research_ideation_call_metadata")
+        _record_migration(con, 13, "research_idea_origin_route")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

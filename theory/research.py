@@ -383,6 +383,11 @@ class OperationChoice:
     continue_construction: bool = False
     idea: CandidateIdea | None = None
     ideation_call_id: int | None = None
+    idea_origin: bool = False
+
+    @property
+    def has_idea_origin(self) -> bool:
+        return self.operation == "develop" and (self.idea is not None or self.idea_origin)
 
 
 @dataclass(frozen=True)
@@ -396,6 +401,7 @@ class LegalResearchMove:
     continue_construction: bool = False
     idea: CandidateIdea | None = None
     ideation_call_id: int | None = None
+    idea_origin: bool = False
     move_id: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -422,6 +428,7 @@ class LegalResearchMove:
             rationale=self.rationale,
             continue_construction=self.continue_construction,
             idea=self.idea, ideation_call_id=self.ideation_call_id,
+            idea_origin=self.idea_origin,
         )
 
 
@@ -570,7 +577,7 @@ def choose_model_route(
         )
 
     role = choice.operation
-    if role == "develop" and choice.idea is not None:
+    if role == "develop" and choice.has_idea_origin:
         role = "idea_develop"
     elif role == "attack" and choice.focus_obligation_id is not None:
         role = "critical_attack"
@@ -1382,6 +1389,7 @@ def _constructive_continuation(
         "branch expansion or proof work; retain all outstanding obligations.",
         open_obligation_ids=open_obligations, focus_obligation_id=focus,
         continue_construction=True,
+        idea_origin=bool(previous.get("idea_origin")),
     )
 
 
@@ -1842,7 +1850,9 @@ def build_research_state(
                 "research_statement", by_id[entity_id].get("body") or ""
             ),
         ) for entity_id in sorted(move_entity_ids)),
-        legal_moves=tuple(ResearchMoveBrief(**asdict(move)) for move in legal_moves),
+        legal_moves=tuple(ResearchMoveBrief(**{
+            key: value for key, value in asdict(move).items() if key != "idea_origin"
+        }) for move in legal_moves),
         recent_iterations=recent,
         controller_summary=ControllerSummary(
             workstream_id=workstream_id,
@@ -2223,6 +2233,8 @@ def _persist_step(
             if choice.idea is not None:
                 set_attribute(con, entity_id, "research_ideation_call_id", str(choice.ideation_call_id))
                 set_attribute(con, entity_id, "research_selected_idea", choice.idea.model_dump_json())
+            if choice.has_idea_origin:
+                set_attribute(con, entity_id, "research_idea_origin", "true")
             set_attribute(con, entity_id, "research_artifact_type", artifact.artifact_type)
             set_attribute(con, entity_id, "research_statement", artifact.statement)
             set_attribute(con, entity_id, "research_operation", choice.operation)
@@ -2563,8 +2575,8 @@ def _start_iteration(
                 project_id,workstream_id,iteration_number,operation,target_entity_id,
                 rationale,consumed_entity_ids_json,status,created_at,
                 selection_mode,legal_move_ids_json,selected_move_id,selection_rationale,
-                strategy_provider,strategy_model,focus_obligation_id
-            ) VALUES(1,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?)
+                strategy_provider,strategy_model,focus_obligation_id,idea_origin
+            ) VALUES(1,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?,?)
             """,
             (
                 workstream_id,
@@ -2581,6 +2593,7 @@ def _start_iteration(
                 selection.strategy_provider,
                 selection.strategy_model,
                 choice.focus_obligation_id,
+                int(choice.has_idea_origin),
             ),
         )
         return int(cur.lastrowid)

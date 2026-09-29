@@ -127,6 +127,7 @@ def test_continuation_has_distinct_move_and_stable_safe_prompt(monkeypatch, tmp_
     root = next(e for e in context.entities if e["id"] == primary)
     choice = choose_next_operation(context, ws, root, history)
     assert choice.continue_construction
+    assert not choice.idea_origin
     assert choice.open_obligation_ids == (obligation,)
     moves = generate_legal_research_moves(context, ws, root, history)
     same_target = [m for m in moves if m.operation == "develop" and m.target_entity_id == primary]
@@ -143,6 +144,22 @@ def test_continuation_has_distinct_move_and_stable_safe_prompt(monkeypatch, tmp_
     assert sections.stable_prefix == _research_prompt_sections(changed_context, root, changed).stable_prefix
     fallback = replace(choice, continue_construction=False)
     assert "Do not merely refine, rename, or continue" in _research_prompt_sections(context, root, fallback).stable_prefix
+
+
+def test_continuation_carries_route_origin_without_idea_content(monkeypatch, tmp_path):
+    ws, primary, _, history = construction_context(monkeypatch, tmp_path)
+    context = for_workstream(ws)
+    root = next(entity for entity in context.entities if entity["id"] == primary)
+    ordinary = choose_next_operation(context, ws, root, history)
+    idea = choose_next_operation(context, ws, root, ({**history[0], "idea_origin": 1},))
+
+    assert ordinary.continue_construction and not ordinary.idea_origin
+    assert idea.continue_construction and idea.idea_origin
+    assert idea.idea is None and idea.ideation_call_id is None
+    assert LegalResearchMove.from_choice(idea).to_operation_choice() == idea
+    assert _research_prompt_sections(context, root, ordinary).render() == (
+        _research_prompt_sections(context, root, idea).render()
+    )
 
 
 def test_failed_attempt_does_not_interrupt_scientific_construction(monkeypatch, tmp_path):
