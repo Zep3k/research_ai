@@ -9,7 +9,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 RESEARCH_NECESSITY_COLUMNS = {
     "necessity_outcome": "TEXT",
@@ -314,7 +314,8 @@ CREATE TABLE IF NOT EXISTS research_iterations (
     strategy_provider TEXT,
     strategy_model TEXT,
     focus_obligation_id INTEGER,
-    idea_origin INTEGER NOT NULL DEFAULT 0 CHECK (idea_origin IN (0,1)),
+    develop_provenance TEXT NOT NULL DEFAULT 'ordinary'
+        CHECK (develop_provenance IN ('ordinary','idea','frontier')),
     necessity_outcome TEXT,
     necessity_contract_entity_ids_json TEXT,
     necessity_audit_summary TEXT,
@@ -995,6 +996,24 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
             if idea_origin:
                 con.execute("UPDATE research_iterations SET idea_origin=1 WHERE id=?", (row["id"],))
             previous[workstream_id] = (target_id, idea_origin)
+    if version < 14:
+        _add_column(con, "research_iterations",
+                    "develop_provenance TEXT NOT NULL DEFAULT 'ordinary' "
+                    "CHECK (develop_provenance IN ('ordinary','idea','frontier'))")
+        columns = {row[1] for row in con.execute("PRAGMA table_info(research_iterations)")}
+        if "idea_origin" in columns:
+            con.execute("UPDATE research_iterations SET develop_provenance='idea' "
+                        "WHERE idea_origin=1")
+            con.execute("ALTER TABLE research_iterations DROP COLUMN idea_origin")
+        con.execute("""
+            INSERT OR IGNORE INTO entity_attributes(
+                project_id,entity_id,key,value,created_at,updated_at
+            )
+            SELECT project_id,entity_id,'research_develop_provenance','idea',created_at,updated_at
+            FROM entity_attributes
+            WHERE key='research_idea_origin' AND value='true'
+        """)
+        con.execute("DELETE FROM entity_attributes WHERE key='research_idea_origin'")
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -1019,6 +1038,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 11, "obligation_reframing")
     _record_migration(con, 12, "research_ideation_call_metadata")
     _record_migration(con, 13, "research_idea_origin_route")
+    _record_migration(con, 14, "research_develop_provenance")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -1060,6 +1080,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 11, "obligation_reframing")
         _record_migration(con, 12, "research_ideation_call_metadata")
         _record_migration(con, 13, "research_idea_origin_route")
+        _record_migration(con, 14, "research_develop_provenance")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

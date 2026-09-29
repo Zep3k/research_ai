@@ -127,8 +127,8 @@ def test_case02b_exposes_selects_and_executes_simplification_with_provenance(cas
         iterations = [dict(r) for r in con.execute("SELECT * FROM research_iterations ORDER BY id")]
     assert iterations[0]["selected_move_id"].endswith(":propagate_conflict")
     assert iterations[1]["selection_mode"] == "deterministic_baseline"
-    assert [row["idea_origin"] for row in iterations] == [1, 1]
-    assert all(context.attributes[entity_id]["research_idea_origin"] == "true"
+    assert [row["develop_provenance"] for row in iterations] == ["idea", "idea"]
+    assert all(context.attributes[entity_id]["research_develop_provenance"] == "idea"
                for entity_id in result.artifact_ids)
     assert "research_selected_idea" not in context.attributes[result.artifact_ids[1]]
     assert all(row["operation"] != "ideate" for row in iterations)
@@ -148,7 +148,8 @@ def test_idea_origin_survives_second_continuation_and_resume(case02b, monkeypatc
                  if request["response_model"].__name__ == "ResearchStepReport"]
     assert [request["model"] for request in execution] == ["gpt-6-sol"] * 3
     assert all(request["max_output_tokens"] == 12_000 for request in execution)
-    assert all("research_idea_origin" not in request["prompt"] for request in provider.requests)
+    assert all("research_develop_provenance" not in request["prompt"]
+               for request in provider.requests)
     assert decision_from_prompt(execution[1]["prompt"]).get("selected_idea") is None
     assert decision_from_prompt(execution[2]["prompt"]).get("selected_idea") is None
     with connect() as con:
@@ -156,10 +157,10 @@ def test_idea_origin_survives_second_continuation_and_resume(case02b, monkeypatc
             "SELECT * FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
             (wa[0],),
         )]
-    assert [row["idea_origin"] for row in rows] == [1, 1, 1]
+    assert [row["develop_provenance"] for row in rows] == ["idea"] * 3
     assert all(row["status"] == "completed" for row in rows)
     context = for_workstream(wa[0])
-    assert context.attributes[resumed.artifact_ids[0]]["research_idea_origin"] == "true"
+    assert context.attributes[resumed.artifact_ids[0]]["research_develop_provenance"] == "idea"
     assert "research_selected_idea" not in context.attributes[resumed.artifact_ids[0]]
 
 
@@ -188,14 +189,13 @@ def test_leaving_idea_route_does_not_mark_later_develops(case02b, monkeypatch):
             "SELECT * FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
             (wa[0],),
         )]
-    assert [row["idea_origin"] for row in rows] == [1, 0, 0]
+    assert [row["develop_provenance"] for row in rows] == ["idea", "ordinary", "ordinary"]
     assert rows[1]["selected_move_id"].startswith(f"develop:{wa[3]}:")
     assert not rows[1]["selected_move_id"].endswith(":continue")
     assert rows[2]["selected_move_id"].endswith(":continue")
     context = for_workstream(wa[0])
-    assert context.attributes[result.artifact_ids[0]]["research_idea_origin"] == "true"
-    assert all("research_idea_origin" not in context.attributes[entity_id]
-               for entity_id in result.artifact_ids[1:])
+    assert [context.attributes[entity_id]["research_develop_provenance"]
+            for entity_id in result.artifact_ids] == ["idea", "ordinary", "ordinary"]
 
 
 def test_strategist_can_decline_all_ideas(case02b, monkeypatch):
@@ -385,20 +385,32 @@ def test_v11_call_log_migration_preserves_old_receipts(monkeypatch, tmp_path):
             assert row["planning_metadata_json"] is None
 
 
-def test_v12_idea_route_backfill_preserves_continuation_after_resume(case02b, monkeypatch):
+@pytest.mark.parametrize("legacy_version", (12, 13))
+def test_legacy_idea_route_migrates_to_provenance_and_resumes(
+    case02b, monkeypatch, legacy_version,
+):
     wa, _, batch = case02b
     provider = install(monkeypatch, batch)
-    research(wa[0], max_calls=2)
+    first = research(wa[0], max_calls=2)
     with sqlite3.connect(".theory/research.db") as con:
-        con.execute("ALTER TABLE research_iterations DROP COLUMN idea_origin")
-        con.execute("PRAGMA user_version=12")
+        if legacy_version == 13:
+            con.execute("ALTER TABLE research_iterations ADD COLUMN idea_origin INTEGER NOT NULL DEFAULT 0")
+            con.execute("UPDATE research_iterations SET idea_origin=1 WHERE develop_provenance='idea'")
+            con.execute("UPDATE entity_attributes SET key='research_idea_origin',value='true' "
+                        "WHERE key='research_develop_provenance' AND value='idea'")
+        con.execute("ALTER TABLE research_iterations DROP COLUMN develop_provenance")
+        con.execute(f"PRAGMA user_version={legacy_version}")
 
     with connect() as con:
         assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert [row[0] for row in con.execute(
-            "SELECT idea_origin FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            "SELECT develop_provenance FROM research_iterations "
+            "WHERE workstream_id=? ORDER BY iteration_number",
             (wa[0],),
-        )] == [1, 1]
+        )] == ["idea", "idea"]
+        assert "idea_origin" not in {row[1] for row in con.execute(
+            "PRAGMA table_info(research_iterations)"
+        )}
         con.execute("UPDATE workstreams SET status='active' WHERE id=?", (wa[0],))
 
     research(wa[0], strategy="off", max_calls=1)
@@ -407,9 +419,13 @@ def test_v12_idea_route_backfill_preserves_continuation_after_resume(case02b, mo
     assert [request["model"] for request in execution] == ["gpt-6-sol"] * 3
     with connect() as con:
         assert [row[0] for row in con.execute(
-            "SELECT idea_origin FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            "SELECT develop_provenance FROM research_iterations "
+            "WHERE workstream_id=? ORDER BY iteration_number",
             (wa[0],),
-        )] == [1, 1, 1]
+        )] == ["idea"] * 3
+    context = for_workstream(wa[0])
+    assert all(context.attributes[entity_id]["research_develop_provenance"] == "idea"
+               for entity_id in first.artifact_ids)
 
 
 def test_unoffered_idea_selection_fails_without_execution(case02b, monkeypatch):

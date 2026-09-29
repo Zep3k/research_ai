@@ -127,12 +127,13 @@ def test_continuation_has_distinct_move_and_stable_safe_prompt(monkeypatch, tmp_
     root = next(e for e in context.entities if e["id"] == primary)
     choice = choose_next_operation(context, ws, root, history)
     assert choice.continue_construction
-    assert not choice.idea_origin
+    assert choice.develop_provenance == "ordinary"
     assert choice.open_obligation_ids == (obligation,)
     moves = generate_legal_research_moves(context, ws, root, history)
     same_target = [m for m in moves if m.operation == "develop" and m.target_entity_id == primary]
     assert len(same_target) == 2  # Constructive continuation and a genuine branch escape.
     assert len({m.move_id for m in same_target}) == 2
+    assert {m.develop_provenance for m in same_target} == {"ordinary", "frontier"}
     assert LegalResearchMove.from_choice(choice).to_operation_choice() == choice
     sections = _research_prompt_sections(context, root, choice)
     assert "Continue the same materially advancing protocol route" in sections.stable_prefix
@@ -146,19 +147,24 @@ def test_continuation_has_distinct_move_and_stable_safe_prompt(monkeypatch, tmp_
     assert "Do not merely refine, rename, or continue" in _research_prompt_sections(context, root, fallback).stable_prefix
 
 
-def test_continuation_carries_route_origin_without_idea_content(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provenance", ("idea", "frontier"))
+def test_continuation_carries_route_origin_without_idea_content(
+    monkeypatch, tmp_path, provenance,
+):
     ws, primary, _, history = construction_context(monkeypatch, tmp_path)
     context = for_workstream(ws)
     root = next(entity for entity in context.entities if entity["id"] == primary)
     ordinary = choose_next_operation(context, ws, root, history)
-    idea = choose_next_operation(context, ws, root, ({**history[0], "idea_origin": 1},))
+    inherited = choose_next_operation(
+        context, ws, root, ({**history[0], "develop_provenance": provenance},)
+    )
 
-    assert ordinary.continue_construction and not ordinary.idea_origin
-    assert idea.continue_construction and idea.idea_origin
-    assert idea.idea is None and idea.ideation_call_id is None
-    assert LegalResearchMove.from_choice(idea).to_operation_choice() == idea
+    assert ordinary.continue_construction and ordinary.develop_provenance == "ordinary"
+    assert inherited.continue_construction and inherited.develop_provenance == provenance
+    assert inherited.idea is None and inherited.ideation_call_id is None
+    assert LegalResearchMove.from_choice(inherited).to_operation_choice() == inherited
     assert _research_prompt_sections(context, root, ordinary).render() == (
-        _research_prompt_sections(context, root, idea).render()
+        _research_prompt_sections(context, root, inherited).render()
     )
 
 

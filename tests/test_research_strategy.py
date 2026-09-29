@@ -355,6 +355,7 @@ def test_no_obligations_strategist_can_develop_past_auxiliary_candidate(
         "develop", primary_id,
         "Explore another top-level route from the supplied problem contract "
         "instead of committing immediately to the current local candidate.",
+        develop_provenance="frontier",
     )
     before_entity = next(entity for entity in context.entities if entity["id"] == candidate)
     before_attributes = copy.deepcopy(context.attributes.get(candidate, {}))
@@ -372,7 +373,7 @@ def test_no_obligations_strategist_can_develop_past_auxiliary_candidate(
     assert len(outcome.artifact_ids) == 1
     assert "Compare proving/attacking it against" in requests[0][1]["prompt"]
     execution = requests[1][1]
-    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-luna", "high", 12_000)
+    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-sol", "high", 12_000)
     assert decision_from_prompt(execution["prompt"])["target_entity_id"] == primary_id
     assert "Do not assume the current open obligations are necessary." not in execution["prompt"]
     after = for_workstream(workstream)
@@ -741,3 +742,102 @@ def test_failed_attack_calls_do_not_change_scientific_strategy_but_success_does(
     assert len(after_success.recent_iterations) == 1
     assert after_success.recent_iterations[0].attack_outcome == "inconclusive"
     assert context.attributes[proof]["research_attack_state"] == "inconclusive"
+
+
+def test_frontier_develop_and_consecutive_continuations_keep_route_after_resume(
+    historical, monkeypatch,
+):
+    workstream, primary_id, _, _, _ = historical
+
+    def select(state):
+        assert "develop_provenance" not in json.dumps(state)
+        frontier = next(move for move in state["legal_moves"]
+                        if move["operation"] == "develop"
+                        and move["target_entity_id"] == primary_id
+                        and not move["continue_construction"] and move["idea"] is None)
+        return {"selected_move_id": frontier["move_id"],
+                "rationale": "Try the offered different top-level route."}
+
+    def execute(decision, number):
+        return step_report(decision, [artifact(
+            "protocol_component", f"Unfinished route component {number}.",
+            f"frontier_component_{number}", [decision["target_entity_id"]],
+            branch_status="unresolved",
+        )])
+
+    requests, _ = install_providers(monkeypatch, select=select, execute=execute)
+    first = research(workstream, max_calls=1)
+    assert first.calls_made == 1
+    for _ in range(2):
+        with connect() as con:
+            con.execute("UPDATE workstreams SET status='active' WHERE id=?", (workstream,))
+        assert research(workstream, strategy="off", max_calls=1).calls_made == 1
+
+    executions = [kwargs for _, kwargs in requests
+                  if kwargs["response_model"] is ResearchStepReport]
+    assert [request["model"] for request in executions] == ["gpt-6-sol"] * 3
+    assert all(request["max_output_tokens"] == 12_000 for request in executions)
+    assert all("research_develop_provenance" not in request["prompt"] for request in executions)
+    with connect() as con:
+        rows = [dict(row) for row in con.execute(
+            "SELECT * FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            (workstream,),
+        )]
+    assert [row["develop_provenance"] for row in rows] == ["frontier"] * 3
+    assert [row["selected_move_id"].endswith(":continue") for row in rows] == [
+        False, True, True,
+    ]
+    context = for_workstream(workstream)
+    assert all(context.attributes[entity_id]["research_develop_provenance"] == "frontier"
+               for row in rows for entity_id in json.loads(row["artifact_ids_json"]))
+
+
+def test_leaving_frontier_route_restores_ordinary_develop_routing(historical, monkeypatch):
+    workstream, primary_id, obligation_id, _, _ = historical
+    selections = 0
+
+    def select(state):
+        nonlocal selections
+        selections += 1
+        if selections == 1:
+            chosen = next(move for move in state["legal_moves"]
+                          if move["operation"] == "develop"
+                          and move["target_entity_id"] == primary_id
+                          and not move["continue_construction"])
+        elif selections == 2:
+            chosen = next(move for move in state["legal_moves"]
+                          if move["operation"] == "develop"
+                          and move["target_entity_id"] == obligation_id
+                          and not move["continue_construction"])
+        else:
+            chosen = next(move for move in state["legal_moves"]
+                          if move["operation"] == "develop"
+                          and move["target_entity_id"] == obligation_id
+                          and move["continue_construction"])
+        return {"selected_move_id": chosen["move_id"],
+                "rationale": "Select the offered route for this bounded step."}
+
+    def execute(decision, number):
+        return step_report(decision, [artifact(
+            "protocol_component", f"Unfinished distinct route component {number}.",
+            f"distinct_route_component_{number}", [decision["target_entity_id"]],
+            branch_status="unresolved",
+        )])
+
+    requests, _ = install_providers(monkeypatch, select=select, execute=execute)
+    assert research(workstream, max_calls=3).calls_made == 3
+    executions = [kwargs for _, kwargs in requests
+                  if kwargs["response_model"] is ResearchStepReport]
+    assert [request["model"] for request in executions] == [
+        "gpt-6-sol", "gpt-6-luna", "gpt-6-luna",
+    ]
+    with connect() as con:
+        rows = [dict(row) for row in con.execute(
+            "SELECT target_entity_id,develop_provenance,selected_move_id "
+            "FROM research_iterations WHERE workstream_id=? ORDER BY iteration_number",
+            (workstream,),
+        )]
+    assert [(row["target_entity_id"], row["develop_provenance"]) for row in rows] == [
+        (primary_id, "frontier"), (obligation_id, "ordinary"), (obligation_id, "ordinary"),
+    ]
+    assert rows[2]["selected_move_id"].endswith(":continue")

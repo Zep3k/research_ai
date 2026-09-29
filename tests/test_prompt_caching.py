@@ -208,7 +208,7 @@ def test_admission_covers_unknown_hits_writes_schema_and_output_cap(monkeypatch,
 def test_research_uses_structured_prompts_without_extra_calls(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, _ = make_research_workstream()
-    Config(research_develop_model="claude-sonnet-5").save()
+    Config(research_frontier_develop_model="claude-sonnet-5").save()
     add_linked_research_entity(workstream, "OpenQuestion", "Unresolved local route lemma",
                                proof_obligation=True)
     requests = {"openai": [], "anthropic": []}

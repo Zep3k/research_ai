@@ -341,7 +341,7 @@ conversion helper. This requires
 `anthropic>=1.8.0` (upgrade dependencies with `pip install -e '.[dev]'`).
 
 Role models are configurable through `research_develop_model`, `research_idea_develop_model`,
-`research_synthesize_model`, `research_prove_model`, `research_attack_model`, and
+`research_frontier_develop_model`, `research_synthesize_model`, `research_prove_model`, `research_attack_model`, and
 `research_critical_attack_model`, plus `research_reframe_model`, in `.theory/config.json`. Missing fields in old
 configs receive the defaults above without rewriting the file. Provider ownership
 and uncached pricing come only from `MODEL_SPECS`; unpriced models fail before a

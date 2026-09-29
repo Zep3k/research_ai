@@ -14,6 +14,7 @@ class Config(BaseModel):
     anthropic_model: str = "claude-opus-5-5"
     research_develop_model: str = "gpt-6-luna"
     research_idea_develop_model: str = "gpt-6-sol"
+    research_frontier_develop_model: str = "gpt-6-sol"
     research_synthesize_model: str = "gpt-6-sol"
     research_prove_model: str = "gpt-6-sol"
     research_attack_model: str = "gpt-6-sol"

@@ -85,7 +85,7 @@ class ResearchContext:
             # Execution routing provenance stays in the graph for audit, not model context.
             "attributes_by_entity_id": {
                 entity_id: {key: value for key, value in attrs.items()
-                            if key != "research_idea_origin"}
+                            if key not in {"research_idea_origin", "research_develop_provenance"}}
                 for entity_id, attrs in self.attributes.items()
             },
             "sources": self.sources,

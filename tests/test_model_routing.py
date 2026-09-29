@@ -15,9 +15,12 @@ from theory.research import (
     RESEARCH_MAX_OUTPUT_TOKENS,
     ResearchStepReport,
     choose_model_route,
+    choose_next_operation,
+    generate_legal_research_moves,
     research,
 )
 from theory.research_ideation import CandidateIdea, IdeaUse
+from theory.research_context import for_workstream
 from test_research import (
     DynamicProvider,
     add_linked_research_entity,
@@ -78,24 +81,59 @@ def test_selected_idea_develop_uses_its_own_configured_role():
     assert choose_model_route(selected_idea, Config()) == ModelRoute(
         "openai", "gpt-6-sol", "high", 12_000, "auto:idea_develop"
     )
+    assert selected_idea.develop_provenance == "idea"
 
 
-def test_idea_origin_continuation_routes_without_replaying_idea():
+def test_develop_provenance_routes_without_replaying_idea():
     cfg = Config(research_develop_model="gpt-6-luna",
-                 research_idea_develop_model="claude-sonnet-5")
-    continuation = OperationChoice(
+                 research_idea_develop_model="claude-sonnet-5",
+                 research_frontier_develop_model="gpt-6-sol")
+    idea_continuation = OperationChoice(
         "develop", 1, "Continue unfinished construction",
-        continue_construction=True, idea_origin=True,
+        continue_construction=True, develop_provenance="idea",
+    )
+    frontier_escape = OperationChoice(
+        "develop", 1, "Explore a different top-level route",
+        develop_provenance="frontier",
+    )
+    frontier_continuation = OperationChoice(
+        "develop", 1, "Continue frontier construction",
+        continue_construction=True, develop_provenance="frontier",
     )
     ordinary_continuation = OperationChoice(
         "develop", 1, "Continue ordinary construction", continue_construction=True,
     )
-    assert continuation.idea is None
-    assert choose_model_route(continuation, cfg) == ModelRoute(
+    obligation_develop = OperationChoice(
+        "develop", 2, "Refine the obligation", focus_obligation_id=2,
+    )
+    assert idea_continuation.idea is None
+    assert choose_model_route(idea_continuation, cfg) == ModelRoute(
         "anthropic", "claude-sonnet-5", "high", 12_000, "auto:idea_develop"
     )
+    for choice in (frontier_escape, frontier_continuation):
+        assert choose_model_route(choice, cfg) == ModelRoute(
+            "openai", "gpt-6-sol", "high", 12_000, "auto:frontier_develop"
+        )
     assert choose_model_route(ordinary_continuation, cfg) == ModelRoute(
         "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+    )
+    assert choose_model_route(obligation_develop, cfg) == ModelRoute(
+        "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+    )
+
+
+def test_no_obligation_branch_escape_is_frontier_develop(monkeypatch, tmp_path):
+    init_workspace(monkeypatch, tmp_path)
+    workstream, primary_id = make_research_workstream("Theorem")
+    context = for_workstream(workstream)
+    primary = next(entity for entity in context.entities if entity["id"] == primary_id)
+    baseline = choose_next_operation(context, workstream, primary, ())
+    assert baseline.operation == "attack"
+    moves = generate_legal_research_moves(context, workstream, primary, ())
+    escape = next(move for move in moves if move.operation == "develop")
+    assert escape.develop_provenance == "frontier"
+    assert choose_model_route(escape.to_operation_choice(), Config()).rationale == (
+        "auto:frontier_develop"
     )
 
 
@@ -108,7 +146,10 @@ def test_forced_provider_uses_single_configured_model_for_every_operation(overri
                for operation, focus, *_ in ROUTES]
     choices.append(OperationChoice("develop", 1, "test", idea=transient_idea()))
     choices.append(OperationChoice("develop", 1, "test", continue_construction=True,
-                                   idea_origin=True))
+                                   develop_provenance="idea"))
+    choices.append(OperationChoice("develop", 1, "test", develop_provenance="frontier"))
+    choices.append(OperationChoice("develop", 1, "test", continue_construction=True,
+                                   develop_provenance="frontier"))
     for choice in choices:
         route = choose_model_route(
             choice, cfg, provider_override=override,
@@ -369,6 +410,7 @@ def test_old_workspace_config_loads_new_role_defaults_without_rewrite(monkeypatc
     assert cfg.openai_model == "gpt-5.6-sol"
     assert cfg.research_develop_model == "gpt-6-luna"
     assert cfg.research_idea_develop_model == "gpt-6-sol"
+    assert cfg.research_frontier_develop_model == "gpt-6-sol"
     assert cfg.research_synthesize_model == cfg.research_prove_model == "gpt-6-sol"
     assert cfg.research_attack_model == "gpt-6-sol"
     assert cfg.research_critical_attack_model == "claude-opus-5-5"

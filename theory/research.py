@@ -399,6 +399,9 @@ def _parse_execution_report(text: str, response_model: type[BaseModel]) -> Resea
     return parse_json_model(text, response_model)
 
 
+DevelopProvenance = Literal["ordinary", "idea", "frontier"]
+
+
 @dataclass(frozen=True)
 class OperationChoice:
     operation: str
@@ -410,11 +413,11 @@ class OperationChoice:
     continue_construction: bool = False
     idea: CandidateIdea | None = None
     ideation_call_id: int | None = None
-    idea_origin: bool = False
+    develop_provenance: DevelopProvenance = "ordinary"
 
-    @property
-    def has_idea_origin(self) -> bool:
-        return self.operation == "develop" and (self.idea is not None or self.idea_origin)
+    def __post_init__(self) -> None:
+        if self.operation == "develop" and self.idea is not None:
+            object.__setattr__(self, "develop_provenance", "idea")
 
 
 @dataclass(frozen=True)
@@ -428,10 +431,12 @@ class LegalResearchMove:
     continue_construction: bool = False
     idea: CandidateIdea | None = None
     ideation_call_id: int | None = None
-    idea_origin: bool = False
+    develop_provenance: DevelopProvenance = "ordinary"
     move_id: str = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.operation == "develop" and self.idea is not None:
+            object.__setattr__(self, "develop_provenance", "idea")
         # Open obligations are shared by every move in a legal set. The operation,
         # target, focus, exact ordered inputs and construction intent distinguish moves.
         focus = self.focus_obligation_id if self.focus_obligation_id is not None else "none"
@@ -455,7 +460,7 @@ class LegalResearchMove:
             rationale=self.rationale,
             continue_construction=self.continue_construction,
             idea=self.idea, ideation_call_id=self.ideation_call_id,
-            idea_origin=self.idea_origin,
+            develop_provenance=self.develop_provenance,
         )
 
 
@@ -604,8 +609,8 @@ def choose_model_route(
         )
 
     role = choice.operation
-    if role == "develop" and choice.has_idea_origin:
-        role = "idea_develop"
+    if role == "develop" and choice.develop_provenance != "ordinary":
+        role = f"{choice.develop_provenance}_develop"
     elif role == "attack" and choice.focus_obligation_id is not None:
         role = "critical_attack"
     model = getattr(cfg, f"research_{role}_model")
@@ -1416,7 +1421,7 @@ def _constructive_continuation(
         "branch expansion or proof work; retain all outstanding obligations.",
         open_obligation_ids=open_obligations, focus_obligation_id=focus,
         continue_construction=True,
-        idea_origin=bool(previous.get("idea_origin")),
+        develop_provenance=previous.get("develop_provenance", "ordinary"),
     )
 
 
@@ -1675,6 +1680,7 @@ def generate_legal_research_moves(
                 rationale="Explore a genuinely different top-level route from the supplied problem contract without assuming the current obligation decomposition.",
                 open_obligation_ids=open_ids,
                 focus_obligation_id=None,
+                develop_provenance="frontier",
             ))
     else:
         choices = [baseline]
@@ -1703,6 +1709,7 @@ def generate_legal_research_moves(
                     "Explore another top-level route from the supplied problem contract "
                     "instead of committing immediately to the current local candidate."
                 ),
+                develop_provenance="frontier",
             ))
     if strategy_enabled:
         for bundle in _primary_synthesis_bundles(context, workstream_id, int(primary["id"]), history):
@@ -1878,7 +1885,7 @@ def build_research_state(
             ),
         ) for entity_id in sorted(move_entity_ids)),
         legal_moves=tuple(ResearchMoveBrief(**{
-            key: value for key, value in asdict(move).items() if key != "idea_origin"
+            key: value for key, value in asdict(move).items() if key != "develop_provenance"
         }) for move in legal_moves),
         recent_iterations=recent,
         controller_summary=ControllerSummary(
@@ -2260,8 +2267,9 @@ def _persist_step(
             if choice.idea is not None:
                 set_attribute(con, entity_id, "research_ideation_call_id", str(choice.ideation_call_id))
                 set_attribute(con, entity_id, "research_selected_idea", choice.idea.model_dump_json())
-            if choice.has_idea_origin:
-                set_attribute(con, entity_id, "research_idea_origin", "true")
+            if choice.operation == "develop":
+                set_attribute(con, entity_id, "research_develop_provenance",
+                              choice.develop_provenance)
             set_attribute(con, entity_id, "research_artifact_type", artifact.artifact_type)
             set_attribute(con, entity_id, "research_statement", artifact.statement)
             set_attribute(con, entity_id, "research_operation", choice.operation)
@@ -2602,7 +2610,7 @@ def _start_iteration(
                 project_id,workstream_id,iteration_number,operation,target_entity_id,
                 rationale,consumed_entity_ids_json,status,created_at,
                 selection_mode,legal_move_ids_json,selected_move_id,selection_rationale,
-                strategy_provider,strategy_model,focus_obligation_id,idea_origin
+                strategy_provider,strategy_model,focus_obligation_id,develop_provenance
             ) VALUES(1,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?,?)
             """,
             (
@@ -2620,7 +2628,7 @@ def _start_iteration(
                 selection.strategy_provider,
                 selection.strategy_model,
                 choice.focus_obligation_id,
-                int(choice.has_idea_origin),
+                choice.develop_provenance,
             ),
         )
         return int(cur.lastrowid)
