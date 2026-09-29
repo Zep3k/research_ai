@@ -17,7 +17,7 @@ from .prompts import PromptContent
 if TYPE_CHECKING:
     from .research_context import ResearchContext
 
-IDEATION_MAX_OUTPUT_TOKENS = 4000
+IDEATION_MAX_OUTPUT_TOKENS = 12_000
 IDEATION_COOLDOWN_ITERATIONS = 3
 
 
