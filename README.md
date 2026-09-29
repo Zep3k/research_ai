@@ -292,6 +292,8 @@ deterministic controller state (full graph context)
         ↓
 legal move frontier
         ↓
+conditional bounded ideation (3–5 transient develop alternatives)
+        ↓
 conditional low-cost strategist
         ↓
 focused execution context
@@ -314,6 +316,7 @@ After choosing the operation, the pure
 | `reframe` (necessity audit) | OpenAI `gpt-6-sol` | high |
 | `attack` without a focus obligation | OpenAI `gpt-6-sol` | high |
 | `attack` with a focus obligation | Anthropic `claude-opus-5-5` | medium |
+| ideation (when triggered) | OpenAI `gpt-6-sol` | high |
 | strategy selection (when needed) | OpenAI `gpt-6-luna` | medium |
 
 Luna is the cheap default worker, Sol handles constructive reasoning and ordinary
@@ -346,18 +349,38 @@ remove the field or change it to `gpt-6-sol` to adopt the new ordinary-attack de
 
 For controlled single-provider ablations, use `--provider openai` or
 `--provider anthropic`. These force `openai_model` or `anthropic_model` for every
-iteration at high effort and **disable the strategist**, even with `--strategy auto`.
+iteration at high effort and **disable ideation and the strategist**, even with `--strategy auto`.
 They retain deterministic operation selection, keeping provider-only experiments
 free of a hidden OpenAI planning call. New configs default those fields to `gpt-6-sol` and
 `claude-opus-5-5`; existing configured values are retained. Each `api_calls` receipt
 and attack review records the actual provider/model, never `auto`.
 
 `--max-calls` is limited to 1–20 and still bounds **execution calls**, not total API
-requests. An iteration has zero or one strategy call followed by exactly one
-execution call. A completed run has strategy calls ≤ execution calls ≤ `max_calls`
-and total calls ≤ `2 * max_calls`. The CLI reports both counts when strategy is
-used; `ResearchOutcome.calls_made` retains its execution-only meaning, alongside
-`strategy_calls_made` and the derived `total_api_calls_made`.
+requests. An iteration has at most one strategy call followed by one execution
+call. Ideation and strategy share a planning allowance of `max_calls`, so total
+calls remain ≤ `2 * max_calls`. Ideation requires two available planning slots
+(generator plus selector), runs at most once per invocation, and is disabled with
+`--strategy off`. When planning slots are spent, execution uses the deterministic
+legal baseline. `ResearchOutcome.calls_made` retains its execution-only meaning,
+alongside `strategy_calls_made`, `ideation_calls_made`, and `total_api_calls_made`.
+
+Ideation is eligible after concrete refutation, an alternative-route reframe,
+unresolved synthesis of complementary inputs without a new obligation candidate
+awaiting testing, or three completed develop/synthesis
+steps without resolution. It requires an existing primary develop move. Persisted
+call metadata enforces a three-completed-iteration cooldown across invocations and
+prevents repeating the same trigger. Existing terminal/stagnation stops still apply.
+`research_ideation_model` defaults to `gpt-6-sol` at high effort with a 4,000-token
+output cap. Ideas are provisional proposals, not proofs or scientific graph writes.
+
+The strict batch has 3–5 distinct mechanisms, explicit supplied graph references,
+route changes and main risks. The strategist may select an idea or any ordinary
+legal move. Only the selected idea enters execution context; accepted execution
+artifacts carry its content and ideation-call provenance. All generated ideas are
+available as call telemetry via `workstream show` and `ideation_telemetry()`, with
+trigger, selection, model, tokens and cost. Schema v12 adds one optional call-metadata
+column; it does not add a research operation or a scientific entity type.
+See [the offline Case 02B evaluation](eval/ideation/README.md).
 
 Legal moves are generated without models or scoring. Each eligible open leaf
 obligation contributes its normal frontier move using the existing local precedence:
@@ -375,7 +398,7 @@ Move IDs encode operation, target, focus and ordered synthesis inputs, for examp
 `attack:14:11:none` or `synthesize:10:10:6,12`. Ordering and IDs are deterministic.
 
 With exactly one legal move, `--strategy auto` selects it for free. With multiple
-moves, it makes one OpenAI `gpt-6-luna` call at **medium** effort, capped at **1,500
+moves and a remaining planning slot, it makes one OpenAI `gpt-6-luna` call at **medium** effort, capped at **1,500
 output tokens**. `research_strategist_model` defaults to `gpt-6-luna` in old configs
 without rewriting them; this milestone permits only that trusted registry model
 for strategy, excluding Sol, Astra and Anthropic models. A compact, deterministic

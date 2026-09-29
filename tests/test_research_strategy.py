@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from theory.cli import app
 from theory.config import Config
-from theory.db import RESEARCH_SELECTION_COLUMNS, SCHEMA, connect, utcnow
+from theory.db import SCHEMA_VERSION, RESEARCH_SELECTION_COLUMNS, SCHEMA, connect, utcnow
 from theory.errors import BudgetExceededError, ConfigurationError, ModelOutputError, TheoryError
 from theory.graph import set_attribute
 from theory.model_calls import budget_guard
@@ -528,7 +528,7 @@ def test_v8_migration_retains_null_strategy_metadata_and_is_idempotent(monkeypat
         con.execute("PRAGMA user_version=8")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
+            assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
             assert con.execute("SELECT name FROM schema_migrations WHERE version=9").fetchone()[0] == "research_strategy_selection"
             row = con.execute("SELECT * FROM research_iterations").fetchone()
             assert con.execute("PRAGMA foreign_key_check").fetchall() == []

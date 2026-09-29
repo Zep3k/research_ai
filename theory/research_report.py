@@ -447,7 +447,7 @@ def _unresolved(snapshot: ReportSnapshot, entities: tuple[EntityReport, ...], st
             result.append(UnresolvedItem(origin="review", record_id=review["id"], kind=review["result"],
                                          text=review["issues"], scope="recorded_unreconciled"))
     for call in snapshot.calls:
-        if call["purpose"] == "research:strategy" or not call["purpose"].startswith("research:"):
+        if call["purpose"] in {"research:strategy", "research:ideate"} or not call["purpose"].startswith("research:"):
             continue
         # Receipt text records what a model said, not what survived validation.
         payload = _json(call["response_text"], {})

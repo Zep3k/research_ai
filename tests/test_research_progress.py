@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from theory.cli import app
-from theory.db import RESEARCH_PROGRESS_COLUMNS, SCHEMA, connect, utcnow
+from theory.db import SCHEMA_VERSION, RESEARCH_PROGRESS_COLUMNS, SCHEMA, connect, utcnow
 from theory.errors import TheoryError
 from theory.graph import set_attribute, set_workstream_status
 from theory.research import (
@@ -443,7 +443,7 @@ def test_v9_migration_is_idempotent_and_preserves_every_existing_value(monkeypat
         con.execute("PRAGMA user_version=9")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
+            assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
             assert con.execute("SELECT name FROM schema_migrations WHERE version=10").fetchone()[0] == "research_progress_metrics"
             row = con.execute("SELECT * FROM research_iterations").fetchone()
             assert con.execute("PRAGMA foreign_key_check").fetchall() == []

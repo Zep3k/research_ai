@@ -8,7 +8,7 @@ from typer.testing import CliRunner
 
 from theory.cli import app
 from theory.config import Config
-from theory.db import RESEARCH_NECESSITY_COLUMNS, SCHEMA, connect, utcnow
+from theory.db import SCHEMA_VERSION, RESEARCH_NECESSITY_COLUMNS, SCHEMA, connect, utcnow
 from theory.errors import ModelOutputError
 from theory.graph import add_entity, link_workstream_entity, set_attribute
 from theory.research import (
@@ -405,7 +405,7 @@ def test_v10_migration_preserves_rows_constraints_indexes_foreign_keys_and_seque
         con.execute("PRAGMA user_version=10")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
+            assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
             assert con.execute("SELECT name FROM schema_migrations WHERE version=11").fetchone()[0] == "obligation_reframing"
             assert con.execute("PRAGMA foreign_key_check").fetchall() == []
             assert con.execute("PRAGMA foreign_keys").fetchone()[0] == 1

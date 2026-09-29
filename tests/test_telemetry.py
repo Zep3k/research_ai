@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from theory.cli import app
 from theory.config import Config
-from theory.db import CALL_TELEMETRY_COLUMNS, SCHEMA, connect, monthly_spend, utcnow
+from theory.db import SCHEMA_VERSION, CALL_TELEMETRY_COLUMNS, SCHEMA, connect, monthly_spend, utcnow
 from theory.errors import ModelOutputError, TelemetryError, TheoryError
 from theory.model_calls import budget_guard, call_model
 from theory.models import ModelResult
@@ -228,7 +228,7 @@ def test_v7_migration_keeps_historical_receipt_details_unknown(monkeypatch, tmp_
         con.execute("PRAGMA user_version=7")
     for _ in range(2):
         with connect() as con:
-            assert con.execute("PRAGMA user_version").fetchone()[0] == 11
+            assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
             assert con.execute("SELECT name FROM schema_migrations WHERE version=8").fetchone()[0] == "normalized_call_telemetry"
             migrated = con.execute("SELECT * FROM api_calls").fetchone()
         assert tuple(migrated[key] for key in old_columns) == original

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable
 
 from pydantic import BaseModel
@@ -39,14 +40,16 @@ def _start_call(
     purpose: str,
     estimated_max_cost_usd: float,
     prompt_utf8_bytes: int,
+    planning_metadata: dict | None = None,
 ) -> int:
     with connect() as con:
         cur = con.execute(
             """
             INSERT INTO api_calls(
                 run_id,workstream_id,provider,model,purpose,input_tokens,output_tokens,cost_usd,
-                estimated_max_cost_usd,status,error_message,response_text,created_at,prompt_utf8_bytes
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                estimated_max_cost_usd,status,error_message,response_text,created_at,prompt_utf8_bytes,
+                planning_metadata_json
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 run_id,
@@ -63,6 +66,7 @@ def _start_call(
                 None,
                 utcnow(),
                 prompt_utf8_bytes,
+                json.dumps(planning_metadata, sort_keys=True) if planning_metadata is not None else None,
             ),
         )
         return int(cur.lastrowid)
@@ -108,6 +112,8 @@ def call_model(
     response_model: type[BaseModel] | None = None,
     effort: str = "high",
     validate_response: Callable[[str], None] | None = None,
+    planning_metadata: dict | None = None,
+    on_started: Callable[[int], None] | None = None,
 ) -> ModelResult:
     call_id = _start_call(
         run_id=run_id,
@@ -117,8 +123,11 @@ def call_model(
         purpose=purpose,
         estimated_max_cost_usd=estimated_max_cost_usd,
         prompt_utf8_bytes=len(render_prompt(prompt).encode("utf-8")),
+        planning_metadata=planning_metadata,
     )
     try:
+        if on_started is not None:
+            on_started(call_id)
         result = provider.complete(
             model=model,
             prompt=prompt,

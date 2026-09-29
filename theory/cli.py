@@ -9,6 +9,7 @@ from rich.table import Table
 from rich.text import Text
 from .attack import attack as run_attack
 from .config import Config
+from .research_ideation import ideation_telemetry
 from .db import connect, initialize, monthly_spend, utcnow
 from .develop import develop as run_develop
 from .errors import TheoryError
@@ -225,14 +226,14 @@ def research_command(
     workstream_id: int,
     provider: str = typer.Option("auto", help="auto, openai, or anthropic"),
     strategy: str = typer.Option(
-        "auto", help="auto or off; explicit providers always disable the strategist."
+        "auto", help="auto or off; explicit providers disable strategy and ideation."
     ),
     max_calls: int = typer.Option(
         4,
         "--max-calls",
         min=1,
         max=MAX_CONTROLLER_CALLS,
-        help="Maximum execution calls; auto strategy can add at most one call per execution.",
+        help="Maximum execution calls; strategy and ideation share an equally sized planning-call allowance.",
     ),
 ):
     """Run the bounded adaptive controller for an active research workstream."""
@@ -246,7 +247,8 @@ def research_command(
     )
     strategy_display = (
         f"{outcome.strategy_calls_made} strategist call(s), "
-        f"{outcome.total_api_calls_made} total API call(s), "
+        + (f"{outcome.ideation_calls_made} ideation call(s), " if outcome.ideation_calls_made else "")
+        + f"{outcome.total_api_calls_made} total API call(s), "
         if outcome.strategy_calls_made else ""
     )
     console.print(
@@ -718,12 +720,22 @@ def workstream_show(workstream_id: int):
             console.print(f"    stop: {escape(iteration['stop_reason'])}")
         if iteration["error_message"]:
             console.print(f"    error: {escape(iteration['error_message'])}")
+    ideation_by_id = {item["id"]: item for item in ideation_telemetry(workstream_id)} if any(
+        call["purpose"] == "research:ideate" for call in calls
+    ) else {}
     for call in calls:
         console.print(
             f"  model call: {call['provider']} / {call['model']} | {call['purpose']} | "
             f"{call['status']} | estimated cost ${float(call['cost_usd']):.4f} "
             f"(admission cap ${float(call['estimated_max_cost_usd']):.4f})"
         )
+        if call["id"] in ideation_by_id:
+            audit = ideation_by_id[call["id"]]
+            metadata = audit["planning"]
+            console.print(f"    ideation trigger: {escape(metadata.get('trigger', 'unknown'))}")
+            console.print(f"    selected idea: {escape(metadata.get('selected_idea_id') or 'none')}")
+            for idea in audit["generated_ideas"]:
+                console.print(f"    transient idea {escape(idea['idea_id'])}: {escape(idea['mechanism'])}")
         if call["uncached_input_tokens"] is not None:
             console.print(
                 f"    input {call['input_tokens']:,} = {call['uncached_input_tokens']:,} uncached"

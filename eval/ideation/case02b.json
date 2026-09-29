@@ -1,0 +1,38 @@
+{
+  "contract": "Weak agreement in a synchronous authenticated network with n parties, at most f Byzantine parties and at most d corrupt incoming/outgoing links per party; n > max(2f, f+2d). If an honest party decides v, every honest party decides v or bottom. If all honest inputs equal v, every honest party decides v. Every honest party eventually decides.",
+  "primitive": "Existing super-send primitive: an origin signs a message and uses relays for authenticated delivery to the intended recipient under the supplied network model. Its delivery guarantee is available as a supplied primitive, not a new phase requirement.",
+  "finding": "Conflicting n-f certificates may exist under the supplied fault assumptions; the current route cannot assume their uniqueness.",
+  "ideas": [
+    {
+      "idea_id": "propagate_conflict",
+      "mechanism": "Propagate authenticated conflict evidence using the existing super-send primitive; recipients with conflict evidence abstain with bottom. Develop a decision guard that prevents incompatible non-bottom decisions.",
+      "exploits": [
+        {"entity_id": "contract", "exploitation": "Weak consistency permits a value alongside bottom; retain persistence and termination."},
+        {"entity_id": "finding", "exploitation": "Treat possible conflicting certificates as evidence to propagate, not an event ruled out by assumption."},
+        {"entity_id": "primitive", "exploitation": "Reuse the supplied authenticated delivery primitive for conflict evidence."}
+      ],
+      "route_change": "Remove the requirement that conflicting certificates be impossible; replace global certificate uniqueness with a guarded abstention route.",
+      "main_risk": "Conflict evidence may arrive too late to prevent incompatible decisions; the guard must preserve unanimous-input persistence and termination."
+    },
+    {
+      "idea_id": "receiver_filter",
+      "mechanism": "Explore local admissibility filtering of signed evidence before allowing a non-bottom output, with bottom when support is ambiguous.",
+      "exploits": [
+        {"entity_id": "contract", "exploitation": "Abstention is permitted only while preserving all required properties."},
+        {"entity_id": "finding", "exploitation": "Conflicting evidence invalidates unrestricted certificate acceptance."}
+      ],
+      "route_change": "Remove unconditional certificate acceptance and investigate a conservative local decision rule before adding communication machinery.",
+      "main_risk": "Different local views may still allow incompatible non-bottom outputs."
+    },
+    {
+      "idea_id": "reuse_relay_evidence",
+      "mechanism": "Explore whether authenticated receipts already available from the relay primitive can restrict decision eligibility without requiring a distinct certificate family.",
+      "exploits": [
+        {"entity_id": "contract", "exploitation": "Keep weak consistency, persistence and termination as separate obligations."},
+        {"entity_id": "primitive", "exploitation": "Inspect existing relay evidence rather than assuming additional delivery guarantees."}
+      ],
+      "route_change": "Remove a proposed extra certificate layer and reuse evidence already produced by the supplied primitive.",
+      "main_risk": "The primitive may not expose receipts sufficient to justify any safe eligibility rule."
+    }
+  ]
+}

@@ -18,6 +18,7 @@ class Config(BaseModel):
     research_attack_model: str = "gpt-6-sol"
     research_critical_attack_model: str = "claude-opus-5-5"
     research_reframe_model: str = "gpt-6-sol"
+    research_ideation_model: str = "gpt-6-sol"
     research_strategist_model: str = "gpt-6-luna"
 
     @classmethod

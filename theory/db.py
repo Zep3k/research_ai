@@ -9,7 +9,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 RESEARCH_NECESSITY_COLUMNS = {
     "necessity_outcome": "TEXT",
@@ -158,6 +158,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     status TEXT NOT NULL DEFAULT 'completed',
     error_message TEXT,
     response_text TEXT,
+    planning_metadata_json TEXT,
     uncached_input_tokens INTEGER CHECK (uncached_input_tokens >= 0),
     cache_read_input_tokens INTEGER CHECK (cache_read_input_tokens >= 0),
     cache_write_input_tokens INTEGER CHECK (cache_write_input_tokens >= 0),
@@ -968,6 +969,8 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
             _add_column(con, "research_iterations", f"{name} {sql_type}")
     if version < 11:
         _migrate_iterations_v11(con)
+    if version < 12:
+        _add_column(con, "api_calls", "planning_metadata_json TEXT")
     con.executescript(TRUST_TRIGGERS)
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_api_calls_workstream_id ON api_calls(workstream_id)"
@@ -990,6 +993,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 9, "research_strategy_selection")
     _record_migration(con, 10, "research_progress_metrics")
     _record_migration(con, 11, "obligation_reframing")
+    _record_migration(con, 12, "research_ideation_call_metadata")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

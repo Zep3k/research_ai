@@ -30,6 +30,10 @@ from .research_prompts import (
     PromptSections, ResearchPromptFacts, build_research_sections, build_strategist_sections,
     build_strategist_prompt as _strategist_prompt,
 )
+from .research_ideation import (
+    CandidateIdea, IdeaBatch, IDEATION_MAX_OUTPUT_TOKENS, build_ideation_prompt,
+    choose_ideation_trigger, previous_ideations, record_idea_selection, validate_ideas,
+)
 from .research_progress import (
     ProgressEvent, ProgressEventKind, ProgressLevel, ProgressRecord, progress_event_kinds,
 )
@@ -292,6 +296,8 @@ class OperationChoice:
     open_obligation_ids: tuple[int, ...] = ()
     focus_obligation_id: int | None = None
     continue_construction: bool = False
+    idea: CandidateIdea | None = None
+    ideation_call_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -303,6 +309,8 @@ class LegalResearchMove:
     open_obligation_ids: tuple[int, ...] = ()
     rationale: str = ""
     continue_construction: bool = False
+    idea: CandidateIdea | None = None
+    ideation_call_id: int | None = None
     move_id: str = field(init=False)
 
     def __post_init__(self) -> None:
@@ -311,6 +319,8 @@ class LegalResearchMove:
         focus = self.focus_obligation_id if self.focus_obligation_id is not None else "none"
         inputs = ",".join(map(str, self.consumed_entity_ids)) or "none"
         suffix = ":continue" if self.continue_construction else ""
+        if self.idea is not None:
+            suffix += f":idea:{self.ideation_call_id}:{self.idea.idea_id}"
         object.__setattr__(self, "move_id", f"{self.operation}:{self.target_entity_id}:{focus}:{inputs}{suffix}")
 
     @classmethod
@@ -326,6 +336,7 @@ class LegalResearchMove:
             open_obligation_ids=self.open_obligation_ids,
             rationale=self.rationale,
             continue_construction=self.continue_construction,
+            idea=self.idea, ideation_call_id=self.ideation_call_id,
         )
 
 
@@ -372,6 +383,8 @@ class ResearchArtifactBrief(ResearchEntityBrief):
 
 class ResearchMoveBrief(PlanningBrief):
     continue_construction: bool = False
+    idea: CandidateIdea | None = None
+    ideation_call_id: int | None = None
     move_id: str
     operation: str
     target_entity_id: int
@@ -512,10 +525,11 @@ class ResearchOutcome:
     stop_reason: str
     final_status: str
     strategy_calls_made: int = 0
+    ideation_calls_made: int = 0
 
     @property
     def total_api_calls_made(self) -> int:
-        return self.calls_made + self.strategy_calls_made
+        return self.calls_made + self.strategy_calls_made + self.ideation_calls_made
 
 
 def _linked_ids(context: ResearchContext, workstream_id: int) -> set[int]:
@@ -1693,7 +1707,8 @@ def build_research_state(
     ) for obligation in open_ids)
     move_entity_ids = {
         entity_id for move in legal_moves
-        for entity_id in (move.target_entity_id, *move.consumed_entity_ids)
+        for entity_id in (move.target_entity_id, *move.consumed_entity_ids,
+                          *(tuple(use.entity_id for use in move.idea.exploits) if move.idea else ()))
     } - {int(primary["id"]), *open_ids}
     linked = _linked_ids(context, workstream_id)
     terminal = tuple(brief(entity) for entity_id, entity in sorted(by_id.items())
@@ -2114,6 +2129,9 @@ def _persist_step(
                 source_ids=artifact.source_ids,
                 generated_by_llm=True,
             )
+            if choice.idea is not None:
+                set_attribute(con, entity_id, "research_ideation_call_id", str(choice.ideation_call_id))
+                set_attribute(con, entity_id, "research_selected_idea", choice.idea.model_dump_json())
             set_attribute(con, entity_id, "research_artifact_type", artifact.artifact_type)
             set_attribute(con, entity_id, "research_statement", artifact.statement)
             set_attribute(con, entity_id, "research_operation", choice.operation)
@@ -2587,7 +2605,11 @@ def _run_research(
     workstream_id: int, provider_name: str = "auto", *, max_calls: int,
     strategy: Literal["auto", "off"] = "auto", cfg: Config,
 ) -> ResearchOutcome:
-    """Run at most max_calls executions, each preceded by at most one strategy call."""
+    """At most max_calls executions and max_calls planning calls (strategy + ideation).
+
+    Ideation borrows one planning slot; selection falls back to the deterministic
+    legal baseline when that shared allowance is exhausted. No retries or probes.
+    """
     initial_context = for_workstream(workstream_id)
     workstream = initial_context.workstream
     if workstream is None:
@@ -2603,6 +2625,7 @@ def _run_research(
 
     calls_made = 0
     strategy_calls_made = 0
+    ideation_calls_made = 0
     iteration_ids: list[int] = []
     artifact_ids: list[int] = []
     last_iteration_id: int | None = None
@@ -2631,15 +2654,65 @@ def _run_research(
                 "all_branches_blocked_or_refuted",
                 "blocked",
                 strategy_calls_made,
+                ideation_calls_made,
             )
         baseline_choice = choose_next_operation(full_context, workstream_id, primary, history)
         strategy_enabled = strategy == "auto" and provider_name == "auto"
         legal_moves = generate_legal_research_moves(
             full_context, workstream_id, primary, history, strategy_enabled=strategy_enabled,
         )
+        ideation_call_id = None
+        # Reserve both a generator and selector slot. A one-call run cannot ideate.
+        if strategy_enabled and not ideation_calls_made and max_calls - strategy_calls_made >= 2:
+            trigger = choose_ideation_trigger(full_context, history, previous_ideations(workstream_id))
+            root_develop = next((move for move in legal_moves
+                                 if move.operation == "develop" and move.target_entity_id == int(primary["id"])
+                                 and move.focus_obligation_id is None), None)
+            if trigger is not None and root_develop is not None:
+                model = cfg.research_ideation_model
+                spec = get_model_spec(model)
+                contract = _problem_contract(full_context, workstream_id)
+                ideation_prompt = build_ideation_prompt(full_context, contract, trigger)
+                estimated_cost = budget_guard(
+                    cfg, model=model, prompt=ideation_prompt,
+                    max_output_tokens=IDEATION_MAX_OUTPUT_TOKENS,
+                    purpose="research:ideate", response_model=IdeaBatch,
+                )
+                call_ids: list[int] = []
+                try:
+                    if spec.provider not in providers:
+                        providers[spec.provider] = get_provider(spec.provider)
+
+                    def validate_ideation(text: str) -> None:
+                        validate_ideas(parse_json_model(text, IdeaBatch), full_context,
+                                       {item.id for item in contract})
+
+                    ideation_result = call_model(
+                        run_id=None, workstream_id=workstream_id,
+                        provider=providers[spec.provider], provider_name=spec.provider,
+                        model=model, purpose="research:ideate", prompt=ideation_prompt,
+                        max_output_tokens=IDEATION_MAX_OUTPUT_TOKENS,
+                        estimated_max_cost_usd=estimated_cost, response_model=IdeaBatch,
+                        effort="high", validate_response=validate_ideation,
+                        planning_metadata=trigger.metadata(history), on_started=call_ids.append,
+                    )
+                    ideation_calls_made += 1
+                    ideation_call_id = call_ids[0]
+                    batch = parse_json_model(ideation_result.text, IdeaBatch)
+                    legal_moves += tuple(LegalResearchMove(
+                        "develop", root_develop.target_entity_id,
+                        open_obligation_ids=root_develop.open_obligation_ids,
+                        rationale="Explore this provisional alternative under the supplied contract; retain its main risk and expose missing premises.",
+                        idea=idea, ideation_call_id=ideation_call_id,
+                    ) for idea in batch.ideas)
+                except Exception as exc:
+                    with connect() as con:
+                        set_workstream_status(con, workstream_id, "error",
+                            summary=f"Research ideation error: {type(exc).__name__}: {exc}"[:4000])
+                    raise
         selection = select_research_move(
             baseline_choice=baseline_choice, legal_moves=legal_moves,
-            strategy_enabled=strategy_enabled,
+            strategy_enabled=strategy_enabled and strategy_calls_made + ideation_calls_made < max_calls,
         )
         if selection is None:
             model = _strategist_model(cfg)
@@ -2693,6 +2766,7 @@ def _run_research(
             target_entity_id=choice.target_entity_id,
             focus_obligation_id=choice.focus_obligation_id,
             consumed_entity_ids=choice.consumed_entity_ids,
+            additional_entity_ids=tuple(use.entity_id for use in choice.idea.exploits) if choice.idea else (),
         )
         prompt = _research_prompt_sections(model_context, primary, choice).as_prompt_content()
         estimated_max_cost = budget_guard(
@@ -2719,6 +2793,8 @@ def _run_research(
                     )
                 raise
         iteration_id = _start_iteration(workstream_id, choice, selection)
+        if ideation_call_id is not None:
+            record_idea_selection(ideation_call_id, choice.idea.idea_id if choice.idea else None, iteration_id)
         last_iteration_id = iteration_id
         iteration_ids.append(iteration_id)
         try:
@@ -2780,6 +2856,7 @@ def _run_research(
                 "human_judgment_required",
                 "blocked",
                 strategy_calls_made,
+                ideation_calls_made,
             )
         if (
             choice.operation == "attack"
@@ -2814,6 +2891,7 @@ def _run_research(
                 "candidate_survived_attack",
                 "completed",
                 strategy_calls_made,
+                ideation_calls_made,
             )
         if _all_branches_terminal(
             full_context_after, workstream_id
@@ -2835,6 +2913,7 @@ def _run_research(
                 "all_branches_blocked_or_refuted",
                 "blocked",
                 strategy_calls_made,
+                ideation_calls_made,
             )
         if current_run_consecutive_no_progress >= 2:
             _finalize(
@@ -2852,6 +2931,7 @@ def _run_research(
                 "stagnation",
                 "blocked",
                 strategy_calls_made,
+                ideation_calls_made,
             )
 
     final_context = for_workstream(workstream_id)
@@ -2879,4 +2959,5 @@ def _run_research(
         "max_calls_exhausted",
         "completed",
         strategy_calls_made,
+        ideation_calls_made,
     )

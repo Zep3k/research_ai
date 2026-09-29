@@ -102,9 +102,10 @@ def focus_research_context(
     target_entity_id: int,
     focus_obligation_id: int | None = None,
     consumed_entity_ids: tuple[int, ...] = (),
+    additional_entity_ids: tuple[int, ...] = (),
 ) -> ResearchContext:
     """Pure local view plus recorded dependency ancestry; omission is not a judgment."""
-    anchors = {target_entity_id, *consumed_entity_ids}
+    anchors = {target_entity_id, *consumed_entity_ids, *additional_entity_ids}
     if focus_obligation_id is not None:
         anchors.add(focus_obligation_id)
     mandatory = anchors | {primary_entity_id} | {
