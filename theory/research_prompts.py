@@ -549,6 +549,13 @@ Do not mark existing obligations resolved merely because a new branch exists.
   "human_judgment_reason": null
 }}''',
     )
+    if choice.operation == "attack":
+        sections = replace(
+            sections,
+            output_contract=(*sections.output_contract,
+                "For attack, consumed_entity_ids MUST be [] and "
+                "addressed_obligation_ids MUST be []."),
+        )
     if choice.operation == "attack" and facts.attack_response_format == "variant":
         # Keep a root object for provider schema compatibility; variants live inside it.
         label, example = sections.output_example.split("\n", 1)

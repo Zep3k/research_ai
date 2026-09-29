@@ -35,12 +35,12 @@
     "example": "45e55898a10db67704fcc51a063c731b558d1b1c4c23a66fb376505453ea66b8"
   },
   "attack": {
-    "words": "add1aab09c59e4472e5c19ffa1a90c706c9a136880b4ef5120a1890d9eb093a4",
+    "words": "ffcb7a18b3a7c5878982e10d1e0d0fd8ef266ec6331ea5ced8c4c1ef4cb85388",
     "decision_and_graph": "486c9d673c3e8063fb186f3457a541b4e12fcf1e665fa40ee4d2f6d4d1185875",
     "example": "c0a9d54e2934bb24d7daa388ee235bf5eef1d00e3150061fda20122d10cc791c"
   },
   "reframe_attack": {
-    "words": "f73c77dc51863f267e09ad3910f0d51dc0545679f781ee2821e28219c0870c4e",
+    "words": "0210d9efa984305bf638ce88e0836332419d61ca3263167e06f0bbbbd9bfbcf4",
     "decision_and_graph": "b513e1c92179a3000aa19367866744da82b541c8f166c03f83bb634969498922",
     "example": "c0a9d54e2934bb24d7daa388ee235bf5eef1d00e3150061fda20122d10cc791c"
   },

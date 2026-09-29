@@ -74,6 +74,32 @@ def test_anthropic_attack_schema_has_flat_artifacts_and_no_outcome_union():
     assert set(schema["properties"]["attack_outcome"]["enum"]) == {
         "critical_issue", "inconclusive", "no_critical_issue",
     }
+    for field in ("consumed_entity_ids", "addressed_obligation_ids",
+                  "necessity_contract_entity_ids"):
+        assert FlatAttackReport.model_json_schema()["properties"][field]["maxItems"] == 0
+        assert schema["properties"][field]["enum"] == [[]]
+    assert schema["properties"]["operation"]["enum"] == ["attack"]
+    assert schema["properties"]["necessity_outcome"]["enum"] == ["not_applicable"]
+    assert schema["properties"]["necessity_audit"]["type"] == "null"
+    assert schema["properties"]["human_judgment_required"]["enum"] == [False]
+    assert schema["properties"]["human_judgment_reason"]["type"] == "null"
+
+
+@pytest.mark.parametrize(("field", "value"), (
+    ("operation", "develop"),
+    ("consumed_entity_ids", [1]),
+    ("addressed_obligation_ids", [1]),
+    ("necessity_outcome", "alternative_route_found"),
+    ("necessity_contract_entity_ids", [1]),
+    ("necessity_audit", {"argument": "Not an attack field."}),
+    ("human_judgment_required", True),
+    ("human_judgment_reason", "Ask the human to resolve this."),
+))
+def test_flat_attack_rejects_structurally_illegal_fields(field, value):
+    payload = attack_payload("inconclusive", False, ["Boundary remains open."])
+    payload[field] = value
+    with pytest.raises(ValidationError):
+        FlatAttackReport.model_validate(payload)
 
 
 @pytest.mark.parametrize("provider", ("openai", "anthropic"))
@@ -99,13 +125,22 @@ def test_non_attack_response_model_is_unchanged(operation, provider):
 
 
 @pytest.mark.parametrize("provider_name", ("openai", "anthropic"))
-def test_provider_attack_shape_runs_shared_semantic_validation(monkeypatch, tmp_path, provider_name):
+@pytest.mark.parametrize("outcome", ("critical_issue", "inconclusive", "no_critical_issue"))
+def test_provider_attack_shape_runs_shared_semantic_validation(monkeypatch, tmp_path, provider_name, outcome):
     init_workspace(monkeypatch, tmp_path)
     ws, primary = make_research_workstream()
     add_linked_research_entity(ws, "ProofAttempt", "Precise argument to test",
                                related_entity_ids=[primary])
-    provider = DynamicProvider(lambda decision, _: step_report(
-        decision, [], attack_outcome="inconclusive", unresolved=["Boundary remains open."]))
+    def respond(decision, _):
+        critical = [artifact("counterexample", "Concrete failing schedule.",
+                             "failing_schedule", [decision["target_entity_id"]])]
+        return step_report(
+            decision, critical if outcome == "critical_issue" else [],
+            attack_outcome=outcome,
+            unresolved=["Boundary remains open."] if outcome == "inconclusive" else [],
+        )
+
+    provider = DynamicProvider(respond)
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
     original = controller._validate_step_report
     validated = []
@@ -117,17 +152,54 @@ def test_provider_attack_shape_runs_shared_semantic_validation(monkeypatch, tmp_
     monkeypatch.setattr(controller, "_validate_step_report", validate)
     result = research(ws, provider_name, max_calls=1)
     assert result.calls_made == 1
-    assert validated and all(outcome == "inconclusive" and operation == "attack"
-                             for _, outcome, operation in validated)
-    expected_report = FlatAttackReport if provider_name == "anthropic" else controller.InconclusiveAttackReport
+    assert validated and all(observed == outcome and operation == "attack"
+                             for _, observed, operation in validated)
+    expected_report = (FlatAttackReport if provider_name == "anthropic" else {
+        "critical_issue": controller.CriticalAttackReport,
+        "inconclusive": controller.InconclusiveAttackReport,
+        "no_critical_issue": controller.NoCriticalIssueAttackReport,
+    }[outcome])
     assert {model for model, _, _ in validated} == {expected_report}
     request = provider.calls[0]
     assert request["response_model"] is _execution_response_model("attack", provider_name)
     example = json.loads(request["prompt"].split("Return ONLY strict JSON with exactly this shape:\n", 1)[1])
     assert ("report" in example) == (provider_name == "openai")
+    assert "consumed_entity_ids MUST be [] and addressed_obligation_ids MUST be []" in request["prompt"]
     with connect() as con:
         call = con.execute("SELECT status,purpose FROM api_calls").fetchone()
     assert tuple(call) == ("completed", "research:attack")
+
+
+@pytest.mark.parametrize("field", ("consumed_entity_ids", "addressed_obligation_ids"))
+def test_anthropic_nonempty_attack_ids_fail_before_scientific_persistence(monkeypatch, tmp_path, field):
+    init_workspace(monkeypatch, tmp_path)
+    ws, primary = make_research_workstream()
+    add_linked_research_entity(ws, "ProofAttempt", "Precise argument to test",
+                               related_entity_ids=[primary])
+
+    def respond(decision, _):
+        report = step_report(decision, [], attack_outcome="inconclusive",
+                             unresolved=["Boundary remains open."])
+        report[field] = [primary]
+        return report
+
+    provider = DynamicProvider(respond)
+    monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
+    before = for_workstream(ws)
+    with pytest.raises(ModelOutputError, match="FlatAttackReport") as error:
+        research(ws, "anthropic", max_calls=1)
+    assert field in str(error.value)
+    after = for_workstream(ws)
+    assert before.entities == after.entities
+    assert before.relations == after.relations
+    assert len(provider.calls) == 1
+    with connect() as con:
+        call = con.execute("SELECT * FROM api_calls").fetchone()
+        iteration = con.execute("SELECT * FROM research_iterations").fetchone()
+        assert con.execute("SELECT COUNT(*) FROM reviews").fetchone()[0] == 0
+    assert call["status"] == "failed" and call["input_tokens"] == 500
+    assert json.loads(call["response_text"])[field] == [primary]
+    assert iteration["status"] == "error"
 
 
 @pytest.mark.parametrize("fault", ("empty_uncertainty", "blank_uncertainty", "missing_critical", "critical_mismatch", "unknown_reference"))

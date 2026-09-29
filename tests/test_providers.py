@@ -187,7 +187,7 @@ def test_anthropic_structured_report_preserves_selected_schema(response_model):
     assert "report" not in schema["properties"]
     if response_model is FlatAttackReport:
         assert "anyOf" not in schema["properties"]["artifacts"]["items"]
-        assert set(schema["$defs"]) == {"ResearchArtifact", "NecessityAudit", "ContractClause"}
+        assert set(schema["$defs"]) == {"ResearchArtifact"}
     else:
         assert "anyOf" in schema["properties"]["artifacts"]["items"]
         for variant, tag in (

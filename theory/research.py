@@ -334,8 +334,21 @@ class FlatAttackReport(ResearchStepReport):
     """Anthropic-compatible attack shape; scientific outcome checks remain local."""
 
     operation: Literal["attack"]
+    consumed_entity_ids: list[int] = Field(
+        default_factory=list, max_length=0, json_schema_extra={"enum": [[]]},
+    )
+    addressed_obligation_ids: list[int] = Field(
+        default_factory=list, max_length=0, json_schema_extra={"enum": [[]]},
+    )
     attack_outcome: Literal["critical_issue", "inconclusive", "no_critical_issue"]
     artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
+    necessity_outcome: Literal["not_applicable"] = "not_applicable"
+    necessity_contract_entity_ids: list[int] = Field(
+        default_factory=list, max_length=0, json_schema_extra={"enum": [[]]},
+    )
+    necessity_audit: Literal[None] = None
+    human_judgment_required: Literal[False]
+    human_judgment_reason: Literal[None]
 
 
 def _execution_response_model(operation: str, provider: str) -> type[BaseModel]:
