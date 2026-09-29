@@ -183,7 +183,7 @@ def test_selected_route_reaches_budget_provider_and_receipts(
     assert initialized == [provider_name]
     request = provider.calls[0]
     assert (request["model"], request["effort"], request["max_output_tokens"]) == (model, effort, 12_000)
-    assert request["response_model"] is ResearchStepReport
+    assert request["response_model"].__name__ == ("ResearchAttackResponse" if operation == "attack" else "ResearchStepReport")
     assert admissions[0][0]["model"] == model
     assert admissions[0][0]["max_output_tokens"] == 12_000
     with connect() as con:
@@ -340,7 +340,7 @@ def test_auto_invalid_output_is_a_single_paid_attempt_with_no_escalation(monkeyp
     provider = DynamicProvider(lambda decision, _: step_report(decision, [],
         attack_outcome="no_critical_issue", unresolved=["Material uncertainty"]))
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
-    with pytest.raises(ModelOutputError, match="no_critical_issue cannot accompany"):
+    with pytest.raises(ModelOutputError, match="NoCriticalIssueAttackReport.*could_not_determine"):
         # Isolate automatic execution routing from the competing root-develop move.
         research(workstream, max_calls=8, strategy="off")
     assert len(provider.calls) == 1

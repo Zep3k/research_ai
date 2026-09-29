@@ -113,7 +113,7 @@ def test_primary_synthesis_persists_joint_branch_without_mutating_inputs(branche
     assert "Synthesize the selected artifacts against the exact problem contract." in execution["prompt"]
     assert "Do not assume quarantined artifacts are true" in execution["prompt"]
     assert "attempt to close obligation" not in execution["prompt"]
-    assert "Use primary synthesis when existing branches contain complementary results" in requests[0][1]["prompt"]
+    assert "Consider primary synthesis when existing branches contain complementary results" in requests[0][1]["prompt"]
     after = for_workstream(workstream)
     for entity_id in (a, b, c):
         assert next(e for e in after.entities if e["id"] == entity_id) == next(e for e in context.entities if e["id"] == entity_id)

@@ -6,7 +6,7 @@ import re
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -285,6 +285,55 @@ class ResearchStepReport(BaseModel):
         elif self.human_judgment_reason is not None:
             raise ValueError("human_judgment_reason must be null when judgment is not required")
         return self
+
+
+class NoncriticalAttackArtifact(GeneralResearchArtifact):
+    artifact_type: Literal[
+        "consequence", "lemma", "protocol_component", "parameter_analysis",
+        "proof_obligation", "open_question", "proof_attempt", "synthesis", "finding",
+    ]
+
+
+class CriticalAttackReport(ResearchStepReport):
+    operation: Literal["attack"]
+    attack_outcome: Literal["critical_issue"]
+    artifacts: list[ResearchArtifactVariant] = Field(min_length=1, max_length=4)
+
+    @model_validator(mode="after")
+    def require_critical_artifact(self) -> "CriticalAttackReport":
+        if not any(a.artifact_type in CRITICAL_ARTIFACT_TYPES for a in self.artifacts):
+            raise ValueError(
+                "critical_issue requires a concrete counterexample, obstruction, or failed approach."
+            )
+        return self
+
+
+class InconclusiveAttackReport(ResearchStepReport):
+    operation: Literal["attack"]
+    attack_outcome: Literal["inconclusive"]
+    artifacts: list[NoncriticalAttackArtifact] = Field(default_factory=list, max_length=4)
+    could_not_determine: list[Annotated[str, Field(pattern=r"\S")]] = Field(min_length=1, max_length=12)
+
+
+class NoCriticalIssueAttackReport(ResearchStepReport):
+    operation: Literal["attack"]
+    attack_outcome: Literal["no_critical_issue"]
+    artifacts: list[NoncriticalAttackArtifact] = Field(default_factory=list, max_length=4)
+    could_not_determine: list[str] = Field(max_length=0)
+
+
+class ResearchAttackResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    # Literal outcome tags discriminate the variants using provider-supported anyOf.
+    # Concrete critical-artifact presence is also checked locally; no output repair.
+    report: CriticalAttackReport | InconclusiveAttackReport | NoCriticalIssueAttackReport
+
+
+def _parse_execution_report(text: str, operation: str) -> ResearchStepReport:
+    if operation == "attack":
+        return parse_json_model(text, ResearchAttackResponse).report
+    return parse_json_model(text, ResearchStepReport)
 
 
 @dataclass(frozen=True)
@@ -2769,13 +2818,14 @@ def _run_research(
             additional_entity_ids=tuple(use.entity_id for use in choice.idea.exploits) if choice.idea else (),
         )
         prompt = _research_prompt_sections(model_context, primary, choice).as_prompt_content()
+        response_model = ResearchAttackResponse if choice.operation == "attack" else ResearchStepReport
         estimated_max_cost = budget_guard(
             cfg,
             model=route.model,
             prompt=prompt,
             max_output_tokens=route.max_output_tokens,
             purpose=f"research:{choice.operation}",
-            response_model=ResearchStepReport,
+            response_model=response_model,
         )
         if route.provider not in providers:
             try:
@@ -2808,11 +2858,14 @@ def _run_research(
                 prompt=prompt,
                 max_output_tokens=route.max_output_tokens,
                 estimated_max_cost_usd=estimated_max_cost,
-                response_model=ResearchStepReport,
+                response_model=response_model,
                 effort=route.effort,
+                validate_response=(lambda text: _validate_step_report(
+                    _parse_execution_report(text, choice.operation), model_context, choice,
+                )) if choice.operation == "attack" else None,
             )
             calls_made += 1
-            report = parse_json_model(result.text, ResearchStepReport)
+            report = _parse_execution_report(result.text, choice.operation)
             _validate_step_report(report, model_context, choice)
             persisted = _persist_step(
                 iteration_id=iteration_id,

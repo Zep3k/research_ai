@@ -35,14 +35,14 @@
     "example": "45e55898a10db67704fcc51a063c731b558d1b1c4c23a66fb376505453ea66b8"
   },
   "attack": {
-    "words": "faee2bda7b3e038250ffa1e8136f1790baec3a4076bf771874f84a38f987f259",
+    "words": "add1aab09c59e4472e5c19ffa1a90c706c9a136880b4ef5120a1890d9eb093a4",
     "decision_and_graph": "486c9d673c3e8063fb186f3457a541b4e12fcf1e665fa40ee4d2f6d4d1185875",
-    "example": "8bd5c789b0552fba6893256400b466bf4b50f5a541e495e0b0d9ca3865360335"
+    "example": "c0a9d54e2934bb24d7daa388ee235bf5eef1d00e3150061fda20122d10cc791c"
   },
   "reframe_attack": {
-    "words": "94deb8a36b5fc752d189debf38b6f1fb61fbf42e99238c928b7f60b5b28f0d15",
+    "words": "f73c77dc51863f267e09ad3910f0d51dc0545679f781ee2821e28219c0870c4e",
     "decision_and_graph": "b513e1c92179a3000aa19367866744da82b541c8f166c03f83bb634969498922",
-    "example": "8bd5c789b0552fba6893256400b466bf4b50f5a541e495e0b0d9ca3865360335"
+    "example": "c0a9d54e2934bb24d7daa388ee235bf5eef1d00e3150061fda20122d10cc791c"
   },
   "synthesize": {
     "words": "0120941083fbceefc038f8ea0bfe18a967b40c23211d9451d464fb3cefc2c108",
@@ -60,6 +60,6 @@
     "example": "2bf23186778f198ab1159c79fee3ff9eaa2dde225f285394fc14f545affdfc6f"
   },
   "strategist": {
-    "words": "8eb5c1c8e5fb1ccdd90c961fff2aa9386be9a4935833300efba3f1e3040919d4"
+    "words": "b979d734a757d009c180635623e02a6ca0c0fd7c4047b4c20f83fb0b7e8cbba8"
   }
 }

@@ -453,6 +453,8 @@ def _unresolved(snapshot: ReportSnapshot, entities: tuple[EntityReport, ...], st
         payload = _json(call["response_text"], {})
         if not isinstance(payload, dict):
             continue
+        if call["purpose"] == "research:attack" and isinstance(payload.get("report"), dict):
+            payload = payload["report"]
         texts = payload.get("could_not_determine", [])
         if isinstance(texts, list):
             for text in texts:

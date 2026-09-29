@@ -27,7 +27,8 @@ CASES = (
 # the duplicated attack-precedence summary is removed (the full rule remains).
 # Protocol-construction evaluation updates only develop/strategist prose fingerprints:
 # prefer constructive continuation and avoid mandatory branch/obligation breadth.
-# Decision/context and output-example fingerprints use the unmodified originals.
+# Case 02B fixes update strategist comparison prose and wrap attack examples in
+# an outcome-variant envelope. Decision/context fingerprints remain unchanged.
 BASELINE = json.loads(
     (Path(__file__).parent / "fixtures" / "research_prompt_baseline.json").read_text()
 )
@@ -129,6 +130,9 @@ def test_execution_preserves_baseline_wording_decision_context_and_example(case)
     assert digest(decision_and_graph) == BASELINE[case]["decision_and_graph"]
     assert digest(sections.output_example) == BASELINE[case]["example"]
     example = json.loads(sections.output_example.split("shape:\n", 1)[1])
+    if choice.operation == "attack":
+        assert set(example) == {"report"}
+        example = example["report"]
     assert example["operation"] == choice.operation
     assert example["target_entity_id"] == choice.target_entity_id
     assert example["consumed_entity_ids"] == list(choice.consumed_entity_ids)
@@ -199,3 +203,28 @@ def test_section_composition_does_not_mutate_original():
     assert changed.stable_prefix == original.stable_prefix
     assert changed.render().endswith("alternate state")
     assert "RESEARCH STATE" in original.render()
+
+
+def test_strategist_applies_same_scientific_criteria_to_every_move():
+    prompt = build_strategist_sections(strategist_state()).stable_prefix
+    for criterion in (
+        "greatest expected contribution toward the exact primary",
+        "Evaluate every offered move using the same scientific criteria",
+        "directly its mechanism engages the current failure or uncertainty",
+        "reduces dependence on unsupported assumptions",
+        "few new unresolved premises",
+        "concretely its claims or mechanism can be tested",
+        "materially distinct it is from already explored routes",
+        "preserves all stated contract requirements",
+        "compare them symmetrically with all ordinary legal moves",
+        "Do not prefer or penalize a move merely because it is an ideation candidate",
+        "synthesize, develop, prove, attack, or reframe",
+        "not because ideation was triggered",
+        "Complementary or unreconciled artifacts alone do not make synthesis preferable",
+    ):
+        assert criterion in prompt
+    for biased_rule in (
+        "Give extra strategic weight to an idea", "Prefer synthesis",
+        "Prefer root development", "prefer prove/attack", "Prefer a legal construction-continuation",
+    ):
+        assert biased_rule not in prompt

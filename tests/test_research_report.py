@@ -231,13 +231,16 @@ def test_precise_sources_and_incomplete_notes_stay_distinct(workspace):
     assert any("never theorem verification" in note for note in report.notes)
 
 
-def test_history_window_and_failed_receipt_uncertainty(workspace):
+@pytest.mark.parametrize("enveloped", (False, True))
+def test_history_window_and_failed_receipt_uncertainty(workspace, enveloped):
     workstream, *_ = seed_report()
     with connect() as con:
-        con.execute("UPDATE api_calls SET response_text=? WHERE status='failed'", (json.dumps({
+        payload = {
             "could_not_determine": ["Unaccepted model speculation"], "human_judgment_required": True,
             "human_judgment_reason": "Historical request, not a current stop",
-        }),))
+        }
+        con.execute("UPDATE api_calls SET purpose='research:attack',response_text=? WHERE status='failed'",
+                    (json.dumps({"report": payload} if enveloped else payload),))
         for number in range(4, 14):
             con.execute("""INSERT INTO research_iterations(project_id,workstream_id,iteration_number,operation,
                 target_entity_id,rationale,status,created_at) VALUES(1,?,?,'develop',1,'Continue','error',?)""", (workstream, number, STAMP))

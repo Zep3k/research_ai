@@ -21,6 +21,7 @@ from theory.research import (
     RESEARCH_MAX_OUTPUT_TOKENS,
     ResearchArtifact,
     ResearchStepReport,
+    ResearchAttackResponse,
     _open_obligation_ids,
     _relevant_synthesis_inputs,
     _research_prompt,
@@ -93,6 +94,8 @@ class DynamicProvider:
         kwargs["prompt"] = render_prompt(kwargs["prompt"])
         self.calls.append(kwargs)
         response = self.responder(decision_from_prompt(kwargs["prompt"]), len(self.calls))
+        if kwargs["response_model"].__name__ == "ResearchAttackResponse":
+            response = {"report": response}
         return ModelResult(
             text=json.dumps(response),
             input_tokens=500,
@@ -1787,7 +1790,7 @@ def test_controller_adapts_develop_synthesize_attack_and_stops_successfully(
         call["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS
         for call in provider.calls
     )
-    assert all(call["response_model"] is ResearchStepReport for call in provider.calls)
+    assert all(call["response_model"] is (ResearchAttackResponse if decision_from_prompt(call["prompt"])["operation"] == "attack" else ResearchStepReport) for call in provider.calls)
     assert all(
         "UNRELATED PROJECT HISTORY SENTINEL" not in call["prompt"]
         for call in provider.calls
@@ -2551,7 +2554,7 @@ def test_reactivated_research_retries_operation_after_errored_iteration(
 
     first_provider = DynamicProvider(invalid_responder)
     monkeypatch.setattr("theory.research.get_provider", lambda _: first_provider)
-    with pytest.raises(ModelOutputError, match="expected 'attack'"):
+    with pytest.raises(ModelOutputError, match="Input should be 'attack'"):
         research(workstream, "openai", max_calls=1)
 
     with connect() as con:

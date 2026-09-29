@@ -45,8 +45,9 @@ def case02b(wa):
 
 
 class OfflineProvider:
-    def __init__(self, batch, *, select_idea=True):
+    def __init__(self, batch, *, select_idea=True, select=None):
         self.batch, self.select_idea = batch, select_idea
+        self.select = select
         self.requests = []
         self.offered = []
         self.executions = 0
@@ -60,12 +61,12 @@ class OfflineProvider:
             state = json.loads(prompt.split("RESEARCH STATE\n", 1)[1])
             self.offered.append(state["legal_moves"])
             move = next((m for m in state["legal_moves"] if m.get("idea") and self.select_idea), state["legal_moves"][0])
-            result = {"selected_move_id": move["move_id"], "rationale": "Test the simplifying candidate if useful; otherwise retain the ordinary move."}
+            result = self.select(state) if self.select else {"selected_move_id": move["move_id"], "rationale": "Test the simplifying candidate if useful; otherwise retain the ordinary move."}
         else:
             self.executions += 1
             decision = decision_from_prompt(prompt)
             selected = decision.get("selected_idea")
-            refs = [decision["target_entity_id"]]
+            refs = [decision["target_entity_id"], *decision["required_consumed_entity_ids"]]
             if selected:
                 refs += [use["entity_id"] for use in selected["exploits"]]
                 statement = "Candidate guard propagates authenticated conflict evidence using super-send and permits bottom; timely delivery remains unproved."
@@ -325,3 +326,61 @@ def test_synthesis_candidate_gets_ordinary_testing_before_more_ideation(wa):
            "resolution_progress": 0, "candidate_created_count": 1,
            "consumed_entity_ids_json": "[2,3]", "target_entity_id": wa[3]}
     assert choose_ideation_trigger(for_workstream(wa[0]), (row,), ()) is None
+
+
+@pytest.mark.parametrize("selected", ("conflict_veto", "synthesize"))
+def test_repair_idea_competes_with_synthesis_after_uniqueness_failure(case02b, monkeypatch, selected):
+    wa, ids, batch = case02b
+    batch["ideas"][0]["idea_id"] = "conflict_veto"
+    batch["ideas"][0]["main_risk"] = (
+        "The bounded adversarial schedule check is specified; no new delivery premise is needed."
+        if selected == "conflict_veto" else
+        "This candidate requires an additional unestablished global timing premise."
+    )
+    delivery_statement = (
+        "Existing delivery rounds require the refuted uniqueness premise."
+        if selected == "conflict_veto" else
+        "Existing delivery rounds transport signed observations within the delay bound."
+    )
+    with connect() as con:
+        set_attribute(con, ids["finding"], "research_artifact_type", "counterexample")
+        technique = add_entity(con, "Technique", "Authenticated delivery component",
+            body=delivery_statement)
+        link_workstream_entity(con, wa[0], technique, "created")
+        set_attribute(con, technique, "research_artifact_type", "protocol_component")
+        set_attribute(con, technique, "related_entity_ids", json.dumps([wa[1]]))
+    rationale = (
+        "Conflict veto removes the refuted uniqueness premise while preserving the exact "
+        "contract; synthesis alone would reconcile components without repairing that premise."
+        if selected == "conflict_veto" else
+        "Synthesis can combine the delivery component with the uniqueness counterexample "
+        "to settle the timing gap; conflict veto still lacks that timing argument, so combining "
+        "these artifacts is more likely to resolve the main goal now."
+    )
+    def select(state):
+        moves = state["legal_moves"]
+        repair = next(m for m in moves if (m.get("idea") or {}).get("idea_id") == "conflict_veto")
+        synthesis = next(m for m in moves if m["operation"] == "synthesize" and m["target_entity_id"] == wa[1])
+        assert any(m["operation"] == "develop" and not m.get("idea") for m in moves)
+        assert delivery_statement in json.dumps(state)
+        # Scripted scientific judgment is driven by the supplied candidate risk;
+        # the controller must accept either choice, not impose an operation preference.
+        new_premise = "unestablished global timing premise" in repair["idea"]["main_risk"]
+        chosen = synthesis if new_premise else repair
+        return {"selected_move_id": chosen["move_id"], "rationale": rationale}
+    provider = install(monkeypatch, batch, select=select)
+    research(wa[0], max_calls=2)
+    prompt = next(r["prompt"] for r in provider.requests if "RESEARCH STATE\n" in r["prompt"])
+    for text in ("These candidates are optional", "compare them symmetrically with all ordinary legal moves",
+                 "exact primary", "Complementary or unreconciled artifacts alone",
+                 "same criteria", "Explain the decisive comparison"):
+        assert text in prompt
+    assert "Prefer synthesis over another independent develop" not in prompt
+    assert "Give extra strategic weight to an idea" not in prompt
+    trace, = ideation_telemetry(wa[0])
+    assert trace["planning"]["selected_idea_id"] == (selected if selected == "conflict_veto" else None)
+    with connect() as con:
+        row = con.execute("SELECT * FROM research_iterations ORDER BY id LIMIT 1").fetchone()
+    assert row["selection_rationale"] == rationale
+    assert row["selection_mode"] == "strategist"
+    assert row["operation"] == ("develop" if selected == "conflict_veto" else "synthesize")
