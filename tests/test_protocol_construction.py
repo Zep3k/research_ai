@@ -145,6 +145,19 @@ def test_continuation_has_distinct_move_and_stable_safe_prompt(monkeypatch, tmp_
     assert "Do not merely refine, rename, or continue" in _research_prompt_sections(context, root, fallback).stable_prefix
 
 
+def test_failed_attempt_does_not_interrupt_scientific_construction(monkeypatch, tmp_path):
+    ws, primary, partial, history = construction_context(monkeypatch, tmp_path)
+    context = for_workstream(ws)
+    root = next(entity for entity in context.entities if entity["id"] == primary)
+    failed_attack = {"status": "error", "operation": "attack", "target_entity_id": partial}
+    baseline = choose_next_operation(context, ws, root, history)
+    moves = generate_legal_research_moves(context, ws, root, history)
+
+    assert baseline.continue_construction
+    assert choose_next_operation(context, ws, root, (*history, failed_attack)) == baseline
+    assert generate_legal_research_moves(context, ws, root, (*history, failed_attack)) == moves
+
+
 def test_dependency_closure_handles_cycles_without_reverse_branch_expansion(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     ws, primary = make_research_workstream()

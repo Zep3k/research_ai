@@ -16,9 +16,10 @@ from theory.graph import set_attribute
 from theory.model_calls import budget_guard
 from theory.models import ModelResult
 from theory.prompts import render_prompt
+from theory.research_report import build_research_report
 from theory.research import (
     LegalResearchMove, OperationChoice, ResearchStepReport, StrategistDecision,
-    STRATEGIST_MAX_OUTPUT_TOKENS, _strategist_prompt, build_research_state,
+    STRATEGIST_MAX_OUTPUT_TOKENS, _history, _strategist_prompt, build_research_state,
     choose_next_operation, generate_legal_research_moves, research,
     select_research_move, validate_strategist_decision,
 )
@@ -652,7 +653,7 @@ def test_strategy_cost_is_spent_before_execution_budget_admission(historical, mo
     assert tuple(receipt) == ("research:strategy", 0.000081)
 
 
-def test_recent_error_focus_is_recovered_but_does_not_change_fairness(historical):
+def test_recent_error_is_absent_from_scientific_state_and_fairness(historical):
     workstream, primary_id, a, b, proof = historical
     history = ({"iteration_number": 1, "status": "error", "operation": "attack",
                 "target_entity_id": proof, "material_progress": 0, "duplicate_count": 0,
@@ -660,7 +661,81 @@ def test_recent_error_focus_is_recovered_but_does_not_change_fairness(historical
     context, primary, moves, baseline = load_moves(workstream, primary_id, history)
     assert baseline.target_entity_id == a
     state = build_research_state(context, workstream_id=workstream, primary=primary, history=history, legal_moves=moves)
-    assert state.recent_iterations[0].focus_obligation_id == b
-    assert state.recent_iterations[0].status == "error"
-    assert state.controller_summary.error_iterations == 1
+    assert state.recent_iterations == ()
+    assert "error_iterations" not in state.model_dump_json()
     assert all(obligation.last_focused_iteration is None for obligation in state.open_obligations)
+
+
+def test_failed_attack_calls_do_not_change_scientific_strategy_but_success_does(
+    historical, monkeypatch,
+):
+    workstream, primary_id, _, _, proof = historical
+    scientific_states = []
+    execution_attempts = 0
+
+    def select(state):
+        scientific_states.append(state)
+        attack = next(move for move in state["legal_moves"]
+                      if move["operation"] == "attack" and move["target_entity_id"] == proof)
+        return {"selected_move_id": attack["move_id"],
+                "rationale": "Test the same concrete proof candidate."}
+
+    def execute(decision, _):
+        nonlocal execution_attempts
+        execution_attempts += 1
+        if execution_attempts <= 2:
+            raise TimeoutError("offline attack transport failure")
+        return step_report(decision, [], attack_outcome="inconclusive",
+                           unresolved=["The boundary estimate remains undecided."])
+
+    requests, _ = install_providers(monkeypatch, select=select, execute=execute)
+    context, primary, moves, baseline = load_moves(workstream, primary_id)
+    initial = build_research_state(context, workstream_id=workstream, primary=primary,
+                                   history=(), legal_moves=moves)
+    assert baseline.target_entity_id != proof
+    for expected_error_count in (1, 2):
+        with pytest.raises(TheoryError, match="offline attack transport failure"):
+            research(workstream, max_calls=1)
+        with connect() as con:
+            rows = [dict(row) for row in con.execute(
+                "SELECT * FROM research_iterations WHERE workstream_id=? ORDER BY id",
+                (workstream,),
+            )]
+            assert len(rows) == expected_error_count
+            assert all(row["status"] == "error" and row["material_progress"] == 0
+                       and row["resolution_progress"] is None for row in rows)
+            con.execute("UPDATE workstreams SET status='active' WHERE id=?", (workstream,))
+        context, primary, moves, next_baseline = load_moves(workstream, primary_id, _history(workstream))
+        state = build_research_state(context, workstream_id=workstream, primary=primary,
+                                     history=_history(workstream), legal_moves=moves)
+        assert state.model_dump() == initial.model_dump()
+        assert next_baseline == baseline
+        assert state.recent_iterations == ()
+        assert next(e for e in context.entities if e["id"] == proof)["status"] == "active"
+        assert context.attributes[proof].get("research_attack_state") is None
+        assert "error_iterations" not in state.model_dump_json()
+        assert scientific_states[-1] == json.loads(initial.model_dump_json())
+
+    audit = build_research_report(workstream)
+    assert len(audit.recent_iterations) == 2
+    assert all(row.status == "error" for row in audit.recent_iterations)
+    cli = CliRunner().invoke(app, ["workstream", "show", str(workstream)])
+    assert cli.exit_code == 0, cli.output
+    assert "offline attack transport failure" in cli.output
+    with connect() as con:
+        assert con.execute("SELECT COUNT(*) FROM api_calls WHERE status='failed'").fetchone()[0] == 2
+
+    result = research(workstream, max_calls=1)
+    assert result.calls_made == 1 and execution_attempts == 3
+    assert scientific_states[0] == scientific_states[1] == scientific_states[2]
+    assert [request[1]["response_model"] is StrategistDecision for request in requests].count(True) == 3
+    with connect() as con:
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (workstream,))
+    context, primary, moves, _ = load_moves(workstream, primary_id, _history(workstream))
+    after_success = build_research_state(context, workstream_id=workstream, primary=primary,
+                                          history=_history(workstream), legal_moves=moves)
+    assert after_success.model_dump() != initial.model_dump()
+    assert after_success.controller_summary.completed_iterations == 1
+    assert len(after_success.recent_iterations) == 1
+    assert after_success.recent_iterations[0].attack_outcome == "inconclusive"
+    assert context.attributes[proof]["research_attack_state"] == "inconclusive"

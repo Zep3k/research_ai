@@ -76,7 +76,7 @@ def strategist_state(offset=0):
         move_entities=(), legal_moves=(), recent_iterations=(),
         controller_summary=ControllerSummary(
             workstream_id=701 + offset, workstream_status="active",
-            completed_iterations=offset, error_iterations=0, eligible_obligation_ids=(),
+            completed_iterations=offset, eligible_obligation_ids=(),
         ),
     )
 

@@ -18,7 +18,7 @@ from theory.research import research, _research_prompt_sections, OperationChoice
 from theory.research_context import for_workstream
 from theory.research_ideation import (
     IdeaBatch, IdeationTrigger, build_ideation_prompt,
-    choose_ideation_trigger, ideation_telemetry, validate_ideas,
+    choose_ideation_trigger, ideation_telemetry, previous_ideations, validate_ideas,
 )
 from test_research import artifact, decision_from_prompt, step_report
 from test_research_reframe import wa, planning
@@ -168,6 +168,27 @@ def test_failed_ideation_is_logged_without_retry_or_scientific_write(case02b, mo
         assert con.execute("SELECT COUNT(*) FROM research_iterations").fetchone()[0] == 0
 
 
+def test_failed_ideation_does_not_consume_trigger_on_manual_resume(case02b, monkeypatch):
+    wa, _, batch = case02b
+    valid_batch = copy.deepcopy(batch)
+    batch["ideas"][0]["exploits"][0]["entity_id"] = 999999
+    provider = install(monkeypatch, batch)
+    trigger = choose_ideation_trigger(for_workstream(wa[0]), (), ())
+
+    with pytest.raises(ModelOutputError, match="supplied graph"):
+        research(wa[0], max_calls=2)
+    assert previous_ideations(wa[0]) == ()
+    assert ideation_telemetry(wa[0])[0]["status"] == "failed"
+
+    with connect() as con:
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (wa[0],))
+    assert choose_ideation_trigger(for_workstream(wa[0]), (), previous_ideations(wa[0])) == trigger
+    provider.batch = valid_batch
+    resumed = research(wa[0], max_calls=2)
+    assert resumed.ideation_calls_made == 1
+    assert [call["status"] for call in ideation_telemetry(wa[0])] == ["failed", "completed"]
+
+
 def test_ideation_budget_admission_precedes_provider_call(case02b, monkeypatch):
     wa, _, batch = case02b
     Config(monthly_budget_usd=0.000001).save()
@@ -230,6 +251,21 @@ def test_repeated_expansion_requires_three_unresolved_steps(wa):
     assert choose_ideation_trigger(context, rows[:2], ()) is None
     assert choose_ideation_trigger(context, rows, ()).reason == "repeated_expansion_without_resolution"
     assert choose_ideation_trigger(context, (*rows[:2], {**rows[-1], "resolution_progress": 1}), ()) is None
+
+
+def test_failed_iterations_do_not_trigger_ideation_or_advance_its_cooldown(wa):
+    context = for_workstream(wa[0])
+    completed = tuple({"id": i, "status": "completed", "operation": "develop",
+                       "resolution_progress": 0} for i in (1, 2))
+    failed = (
+        {"id": 3, "status": "error", "operation": "develop", "resolution_progress": 0},
+        {"id": 4, "status": "error", "operation": "attack", "attack_outcome": "critical_issue"},
+    )
+    assert choose_ideation_trigger(context, (*completed, *failed), ()) is None
+    third = {"id": 5, "status": "completed", "operation": "develop", "resolution_progress": 0}
+    trigger = choose_ideation_trigger(context, (*completed, *failed, third), ())
+    assert trigger.reason == "repeated_expansion_without_resolution"
+    assert trigger.iteration_ids == (1, 2, 5)
 
 
 def test_prompts_keep_ideas_dynamic_and_provisional(case02b):

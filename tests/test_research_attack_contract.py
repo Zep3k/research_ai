@@ -77,12 +77,24 @@ def test_anthropic_attack_schema_has_flat_artifacts_and_no_outcome_union():
     for field in ("consumed_entity_ids", "addressed_obligation_ids",
                   "necessity_contract_entity_ids"):
         assert FlatAttackReport.model_json_schema()["properties"][field]["maxItems"] == 0
-        assert schema["properties"][field]["enum"] == [[]]
+        assert "enum" not in schema["properties"][field]
     assert schema["properties"]["operation"]["enum"] == ["attack"]
     assert schema["properties"]["necessity_outcome"]["enum"] == ["not_applicable"]
     assert schema["properties"]["necessity_audit"]["type"] == "null"
     assert schema["properties"]["human_judgment_required"]["enum"] == [False]
     assert schema["properties"]["human_judgment_reason"]["type"] == "null"
+
+    def assert_scalar_enums(node):
+        if isinstance(node, dict):
+            if "enum" in node:
+                assert all(not isinstance(value, (list, dict)) for value in node["enum"])
+            for value in node.values():
+                assert_scalar_enums(value)
+        elif isinstance(node, list):
+            for value in node:
+                assert_scalar_enums(value)
+
+    assert_scalar_enums(schema)
 
 
 @pytest.mark.parametrize(("field", "value"), (

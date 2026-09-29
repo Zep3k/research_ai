@@ -169,7 +169,7 @@ def previous_ideations(workstream_id: int) -> tuple[dict, ...]:
     with connect() as con:
         return tuple(json.loads(row[0]) for row in con.execute(
             "SELECT planning_metadata_json FROM api_calls WHERE workstream_id=? "
-            "AND purpose='research:ideate' ORDER BY id", (workstream_id,),
+            "AND purpose='research:ideate' AND status='completed' ORDER BY id", (workstream_id,),
         ) if row[0])
 
 

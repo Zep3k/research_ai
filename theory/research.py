@@ -335,16 +335,16 @@ class FlatAttackReport(ResearchStepReport):
 
     operation: Literal["attack"]
     consumed_entity_ids: list[int] = Field(
-        default_factory=list, max_length=0, json_schema_extra={"enum": [[]]},
+        default_factory=list, max_length=0,
     )
     addressed_obligation_ids: list[int] = Field(
-        default_factory=list, max_length=0, json_schema_extra={"enum": [[]]},
+        default_factory=list, max_length=0,
     )
     attack_outcome: Literal["critical_issue", "inconclusive", "no_critical_issue"]
     artifacts: list[ResearchArtifact] = Field(default_factory=list, max_length=4)
     necessity_outcome: Literal["not_applicable"] = "not_applicable"
     necessity_contract_entity_ids: list[int] = Field(
-        default_factory=list, max_length=0, json_schema_extra={"enum": [[]]},
+        default_factory=list, max_length=0,
     )
     necessity_audit: Literal[None] = None
     human_judgment_required: Literal[False]
@@ -507,7 +507,6 @@ class ControllerSummary(PlanningBrief):
     workstream_id: int
     workstream_status: str | None
     completed_iterations: int
-    error_iterations: int
     eligible_obligation_ids: tuple[int, ...]
 
 
@@ -679,6 +678,11 @@ def _history(workstream_id: int) -> tuple[dict, ...]:
             (workstream_id,),
         ).fetchall()
     return tuple(dict(row) for row in rows)
+
+
+def _scientific_history(history: tuple[dict, ...]) -> tuple[dict, ...]:
+    """Execution failures are audit records, never scientific planning evidence."""
+    return tuple(row for row in history if row["status"] == "completed")
 
 
 def _completed_for_target(history: tuple[dict, ...], operation: str, entity_id: int) -> bool:
@@ -1388,6 +1392,7 @@ def choose_next_operation(
     history: tuple[dict, ...],
 ) -> OperationChoice:
     """Choose the next bounded operation deterministically from current graph state."""
+    history = _scientific_history(history)
     primary_id = int(primary["id"])
     linked = _linked_ids(context, workstream_id)
     entity_by_id = {int(entity["id"]): entity for entity in context.entities}
@@ -1611,6 +1616,7 @@ def generate_legal_research_moves(
     strategy_enabled: bool = True,
 ) -> tuple[LegalResearchMove, ...]:
     """Pure frontier enumeration, with one optional strategic branch escape."""
+    history = _scientific_history(history)
     baseline = choose_next_operation(context, workstream_id, primary, history)
     open_ids = _open_obligation_ids(context, workstream_id, int(primary["id"]))
     if open_ids:
@@ -1762,6 +1768,7 @@ def build_research_state(
     legal_moves: tuple[LegalResearchMove, ...],
 ) -> ResearchState:
     """Build a deterministic compact view using only already-loaded state."""
+    history = _scientific_history(history)
     by_id = {int(entity["id"]): entity for entity in context.entities}
 
     def brief(entity: dict) -> ResearchEntityBrief:
@@ -1807,11 +1814,7 @@ def build_research_state(
     recent = tuple(RecentIterationBrief(
         iteration_number=row.get("iteration_number"), operation=row["operation"],
         target_entity_id=int(row["target_entity_id"]),
-        # Error rows are useful planning history too. Recover their provenance
-        # without changing the baseline's completed-only fairness policy.
-        focus_obligation_id=focus or _iteration_focus_obligation_id(
-            context, {**row, "status": "completed"}, all_obligation_ids
-        ),
+        focus_obligation_id=focus,
         status=row["status"], material_progress=bool(row.get("material_progress", False)),
         duplicate_count=row.get("duplicate_count", 0), attack_outcome=row.get("attack_outcome"),
         stop_reason=row.get("stop_reason"),
@@ -1828,7 +1831,7 @@ def build_research_state(
         candidate_tested_count=row.get("candidate_tested_count"),
         closed_branch_count=row.get("closed_branch_count"),
         accepted_artifact_count=row.get("accepted_artifact_count"),
-    ) for row, focus in list(zip(history, focuses)) if row["status"] in {"completed", "error"})[-6:]
+    ) for row, focus in list(zip(history, focuses))[-6:])
     return ResearchState(
         primary_target=brief(primary), problem_contract=_problem_contract(context, workstream_id),
         open_obligations=obligations,
@@ -1845,7 +1848,6 @@ def build_research_state(
             workstream_id=workstream_id,
             workstream_status=context.workstream["status"] if context.workstream else None,
             completed_iterations=sum(row["status"] == "completed" for row in history),
-            error_iterations=sum(row["status"] == "error" for row in history),
             eligible_obligation_ids=eligible,
         ),
     )
@@ -2724,7 +2726,7 @@ def _run_research(
     while calls_made < max_calls:
         reactivate_bypassed_obligations(workstream_id)
         full_context = for_workstream(workstream_id)
-        history = _history(workstream_id)
+        history = _scientific_history(_history(workstream_id))
         if _all_branches_terminal(
             full_context, workstream_id
         ) and not _open_obligation_ids(full_context, workstream_id, int(primary["id"])):
