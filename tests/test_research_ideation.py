@@ -30,6 +30,8 @@ CASE = json.loads((Path(__file__).parents[1] / "eval/ideation/case02b.json").rea
 def case02b(wa):
     ws, primary, contract, obligation = wa
     with connect() as con:
+        # Top-level ideation requires no actionable local obligation frontier.
+        set_attribute(con, obligation, "research_obligation_state", "resolved_candidate")
         con.execute("UPDATE entities SET body=? WHERE id=?", (CASE["contract"], contract))
         finding = add_entity(con, "Counterexample", "Certificate uniqueness fails", body=CASE["finding"], trust_state="quarantined")
         primitive = add_entity(con, "Assumption", "Existing authenticated super-send", body=CASE["primitive"])
@@ -170,6 +172,9 @@ def test_leaving_idea_route_does_not_mark_later_develops(case02b, monkeypatch):
     def choose(state):
         moves = state["legal_moves"]
         chosen = next((move for move in moves if move["idea"]), None)
+        if chosen is not None:
+            with connect() as con:
+                set_attribute(con, wa[3], "research_obligation_state", "open")
         if chosen is None:
             chosen = next(move for move in moves if move["operation"] == "develop"
                           and move["target_entity_id"] == wa[3]

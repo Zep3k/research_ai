@@ -162,6 +162,7 @@ def test_local_proof_work_retains_focus_evidence_dependencies_and_negative_relat
         proof = generated(con, ws, "timing_argument", route=root, kind="ProofAttempt", related=(obligation,))
         lemma = generated(con, ws, "direct_evidence", route=root, kind="Lemma", related=(obligation,))
         premise = generated(con, ws, "evidence_dependency", kind="Finding", related=(model,))
+        add_relation(con, proof, "DEPENDS_ON", lemma)
         add_relation(con, lemma, "DEPENDS_ON", premise)
         obstruction = generated(con, ws, "known_obstruction", kind="Obstruction", status="blocked")
         counterexample = generated(con, ws, "known_counterexample", kind="Counterexample")
@@ -172,6 +173,8 @@ def test_local_proof_work_retains_focus_evidence_dependencies_and_negative_relat
     focused = focus_research_context(full, workstream_id=ws, primary_entity_id=primary,
         target_entity_id=proof, focus_obligation_id=obligation, operation=operation)
     expected = {primary, model, obligation, proof, lemma, premise, obstruction, counterexample}
+    if operation == "attack":
+        expected.add(root)
     assert {e["id"] for e in focused.entities} == expected
     assert omitted not in focused.context_scope["included_entity_ids"]
     assert focused.context_scope["expansion_anchor_ids"] == [obligation, proof]

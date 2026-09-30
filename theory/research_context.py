@@ -111,6 +111,7 @@ def focus_research_context(
     additional_entity_ids: tuple[int, ...] = (),
     operation: str | None = None,
     continuation_route_ids: tuple[int, ...] = (),
+    forward_dependencies_only: bool = False,
 ) -> ResearchContext:
     """Select exact graph objects by persisted dependencies, never text ranking.
 
@@ -161,7 +162,8 @@ def focus_research_context(
     references_by_id: dict[int, set[int]] = {}
     for entity_id, attrs in full_context.attributes.items():
         references: set[int] = set()
-        for key in ("related_entity_ids", "addresses_obligation_ids", "research_related_obligation_ids"):
+        for key in ("related_entity_ids", "addresses_obligation_ids", "research_related_obligation_ids",
+                    "research_bypass_replacement_obligation_ids"):
             try:
                 values = json.loads(attrs.get(key, "[]"))
             except (TypeError, ValueError):
@@ -173,7 +175,8 @@ def focus_research_context(
         except (KeyError, TypeError, ValueError):
             pass
         references_by_id[entity_id] = references
-    forward_only = bool(continuation_route_ids) or operation == "synthesize" or bool(consumed_entity_ids)
+    forward_only = (forward_dependencies_only or bool(continuation_route_ids)
+                    or operation in {"synthesize", "attack"} or bool(consumed_entity_ids))
     if not forward_only:
         # Direct evidence around a non-contract target/focus is available for
         # testing. Reverse neighborhoods are never recursively expanded.
@@ -190,23 +193,82 @@ def focus_research_context(
 
     # Follow forward references from anchors and direct evidence, stopping at
     # contract inputs. Finite visited sets preserve full chains and handle cycles.
+    explicit_dependencies: dict[int, set[int]] = {}
     for relation in active_relations:
         if relation["relation_type"] in {"DEPENDS_ON", "USES"}:
-            references_by_id.setdefault(int(relation["source_entity_id"]), set()).add(
-                int(relation["target_entity_id"])
-            )
-    pending = sorted(included - inputs)
-    visited: set[int] = set()
-    while pending:
-        entity_id = pending.pop()
-        if entity_id in visited or entity_id not in available:
-            continue
-        visited.add(entity_id)
-        dependencies = {i for i in references_by_id.get(entity_id, set()) & available
-                        if i in mandatory or route_allowed(i)
-                        or owners.get(i, frozenset()) & selected_routes}
-        included.update(dependencies)
-        pending.extend(sorted(dependencies - visited - inputs))
+            source, target = int(relation["source_entity_id"]), int(relation["target_entity_id"])
+            explicit_dependencies.setdefault(source, set()).add(target)
+            references_by_id.setdefault(source, set()).add(target)
+
+    def expand_dependencies(seeds: set[int], *, explicit_only: bool = False) -> set[int]:
+        pending = sorted(seeds - inputs)
+        visited: set[int] = set()
+        while pending:
+            entity_id = pending.pop()
+            if entity_id in visited or entity_id not in available:
+                continue
+            visited.add(entity_id)
+            references = (explicit_dependencies if explicit_only else references_by_id).get(entity_id, set())
+            dependencies = {i for i in references & available
+                            if i in mandatory or route_allowed(i)
+                            or owners.get(i, frozenset()) & selected_routes
+                            # A directed premise remains available for an attack
+                            # even when that cited premise is historical/refuted.
+                            or operation == "attack" and i in explicit_dependencies.get(entity_id, set())}
+            included.update(dependencies)
+            pending.extend(sorted(dependencies - visited - inputs))
+        return visited
+
+    if operation == "attack":
+        negative_ids = {int(e["id"]) for e in full_context.entities
+                        if e["entity_type"] in {"Obstruction", "Counterexample", "FailedApproach"}
+                        and e["status"] == "active"}
+        # An input target still cites directed premises. Keep those premises
+        # without turning the contract into a generic neighborhood anchor.
+        if target_entity_id in inputs:
+            anchors.update(explicit_dependencies.get(target_entity_id, set()) & available)
+            included.update(anchors)
+        # Owning roots are structural context, not sibling-expansion anchors.
+        route_roots = live_routes & frozenset().union(*(owners.get(i, frozenset()) for i in anchors))
+        included.update(route_roots)
+        premises = set(anchors)
+        for relation in active_relations:
+            source, target = int(relation["source_entity_id"]), int(relation["target_entity_id"])
+            if (relation["relation_type"] == "SUPPORTS" and target in anchors
+                    and source not in negative_ids and route_allowed(source)
+                    and route_entity_is_live(full_context, source)):
+                included.add(source)
+                premises.add(source)
+        premises.update(expand_dependencies(premises))
+        seen_evidence: set[int] = set()
+        while True:
+            historical_premises = {i for i in premises - inputs
+                                   if owners.get(i, frozenset()) and not route_allowed(i)}
+            evidence = {i for i in negative_ids if (
+                i in mandatory or route_allowed(i) or owners.get(i, frozenset()) & selected_routes
+                or references_by_id.get(i, set()) & historical_premises
+            ) and references_by_id.get(i, set()) & (premises - inputs)}
+            for relation in active_relations:
+                source, target = int(relation["source_entity_id"]), int(relation["target_entity_id"])
+                negative = (source if relation["relation_type"] in {"REFUTES", "BLOCKS", "CONTRADICTS"}
+                            and target in premises - inputs else target
+                            if relation["relation_type"] == "FAILS_AT" and source in premises - inputs else None)
+                if negative in negative_ids and (
+                    negative in mandatory or route_allowed(negative)
+                    or owners.get(negative, frozenset()) & selected_routes
+                    or (source if negative == target else target) in historical_premises
+                ):
+                    evidence.add(negative)
+            new_evidence = evidence - seen_evidence
+            if not new_evidence:
+                break
+            seen_evidence.update(new_evidence)
+            included.update(new_evidence)
+            # Relevance references on failure evidence must not pull siblings.
+            expanded = expand_dependencies(new_evidence, explicit_only=True)
+            premises.update(expanded - new_evidence)
+    else:
+        expand_dependencies(included)
 
     included &= available
     entities = tuple(entity for entity in full_context.entities if int(entity["id"]) in included)

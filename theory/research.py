@@ -1372,6 +1372,39 @@ def _obligation_ideation_context(
     return focus_research_context(context, additional_entity_ids=tuple(sorted(roots | evidence)), **params)
 
 
+def _top_level_ideation_context(
+    context: ResearchContext, workstream_id: int, primary_id: int, trigger_ids: tuple[int, ...],
+) -> ResearchContext:
+    """Exact contract, live roots, latest four live artifacts per root and evidence."""
+    roots = live_construction_route_ids(context)
+    linked = _linked_ids(context, workstream_id) - _input_ids(context, workstream_id)
+    recent: set[int] = set()
+    for root in sorted(roots):
+        recent.update(sorted((i for i in linked
+            if root in _stored_id_set(_attribute(context, i, ROUTE_IDS))
+            and _route_entity_is_live(context, i)), reverse=True)[:4])
+    anchors = set(roots) | recent | set(trigger_ids)
+    evidence = {int(e["id"]) for e in context.entities
+                if e["status"] == "active"
+                and e["entity_type"] in {"Obstruction", "Counterexample", "FailedApproach"}
+                and _construction_entity_is_active(context, int(e["id"]))
+                and (_stored_id_set(_attribute(context, int(e["id"]), ROUTE_IDS)) & roots
+                     or _stored_id_set(_attribute(context, int(e["id"]), "related_entity_ids")) & anchors
+                     or any(r["status"] == "active" and (
+                         r["relation_type"] in {"REFUTES", "BLOCKS", "CONTRADICTS"}
+                         and int(r["source_entity_id"]) == int(e["id"])
+                         and int(r["target_entity_id"]) in anchors
+                         or r["relation_type"] == "FAILS_AT"
+                         and int(r["target_entity_id"]) == int(e["id"])
+                         and int(r["source_entity_id"]) in anchors
+                     ) for r in context.relations))}
+    return focus_research_context(
+        context, workstream_id=workstream_id, primary_entity_id=primary_id,
+        target_entity_id=primary_id, operation="develop",
+        additional_entity_ids=tuple(sorted(anchors | evidence)), forward_dependencies_only=True,
+    )
+
+
 def eligible_open_obligation_ids(
     context: ResearchContext,
     open_obligation_ids: tuple[int, ...],
@@ -1647,6 +1680,14 @@ def _constructive_continuation(
         for entity_id in accepted
     ):
         return None
+    if focus is None:
+        routes = _iteration_construction_routes(context, previous) & live_construction_route_ids(context)
+        owning = tuple(
+            obligation for obligation in eligible_open_obligation_ids(context, open_obligations)
+            if _stored_id_set(_attribute(context, obligation, ROUTE_IDS)) & routes
+        )
+        if owning:
+            focus = _select_focus_obligation(context, history, owning)
     return OperationChoice(
         "develop", target,
         "Continue the same unfinished protocol route: the previous develop step accepted "
@@ -3087,10 +3128,27 @@ def _run_research(
             ideation_history = tuple({
                 **row, "focus_obligation_id": _iteration_focus_obligation_id(full_context, row, all_obligations),
             } for row in ideation_history)
+            previous_ideas = previous_ideations(workstream_id)
             trigger = choose_ideation_trigger(
-                full_context, ideation_history, previous_ideations(workstream_id),
+                full_context, ideation_history, previous_ideas,
                 open_obligation_ids=open_ids,
             )
+            if trigger is not None and trigger.focus_obligation_id is None:
+                if any(move.focus_obligation_id in open_ids
+                       and move.operation in {"attack", "prove", "synthesize", "develop"}
+                       for move in legal_moves):
+                    trigger = None
+                else:
+                    current_ids = {int(e["id"]) for e in full_context.entities
+                                   if e["status"] == "active" and e["trust_state"] != "contradicted"
+                                   and _construction_entity_is_active(full_context, int(e["id"]))}
+                    retained = tuple(i for i in trigger.entity_ids if i in current_ids)
+                    if trigger.entity_ids and not retained:
+                        trigger = None
+                    else:
+                        trigger = replace(trigger, entity_ids=retained)
+                        if trigger.key in {p.get("trigger_key") for p in previous_ideas}:
+                            trigger = None
             root_develop = next((move for move in legal_moves
                                  if move.operation == "develop" and move.target_entity_id == int(primary["id"])
                                  and move.focus_obligation_id is None), None)
@@ -3100,7 +3158,8 @@ def _run_research(
                 contract = _problem_contract(full_context, workstream_id)
                 ideation_context = (
                     _obligation_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.focus_obligation_id)
-                    if trigger.focus_obligation_id is not None else full_context
+                    if trigger.focus_obligation_id is not None else
+                    _top_level_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.entity_ids)
                 )
                 ideation_prompt = build_ideation_prompt(ideation_context, contract, trigger)
                 estimated_cost = budget_guard(

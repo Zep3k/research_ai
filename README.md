@@ -383,7 +383,11 @@ unresolved synthesis of complementary inputs without a new obligation candidate
 awaiting testing, or three completed develop/synthesis
 steps without resolution. It requires an existing primary develop move. Persisted
 call metadata enforces a three-completed-iteration cooldown across invocations and
-prevents repeating the same trigger. Existing terminal/stagnation stops still apply.
+prevents repeating the same trigger. Top-level ideation is suppressed while legal
+focused attack/prove/synthesize/develop work exists on an active open obligation;
+ordinary reframe and primary frontier-development moves remain available. Local
+`repeated_obligation_failure` ideation is not suppressed by this gate.
+Existing terminal/stagnation stops still apply.
 `research_ideation_model` defaults to `gpt-6-sol` at high effort with a 12,000-token
 output cap. Ideas are provisional proposals, not proofs or scientific graph writes.
 
@@ -401,8 +405,8 @@ preferring simpler/weaker sufficient mechanisms and avoiding repetition of recor
 failed approaches. Each idea is a `develop` move targeting and focusing that
 obligation. The strategist compares it with the existing ordinary moves; selected
 ideas use the strong idea-development model and preserve route ancestry.
-Unselected ideas remain telemetry. Top-level ideation and strategy/provider
-ablations retain their existing behavior. No semantic mechanism classifier or
+Unselected ideas remain telemetry. Strategy/provider ablations retain their
+existing behavior. No semantic mechanism classifier or
 additional scientific operation is introduced.
 
 The strict batch has 3–5 distinct mechanisms, explicit supplied graph references,
@@ -570,6 +574,12 @@ operations, and develops that emit proof obligations, proof attempts or promisin
 candidates reset it. Resume reconstructs the count from iteration receipts and route
 ownership.
 
+When the previous develop has null focus, a continuation recovers an eligible open
+bottleneck explicitly owned by its live route. Multiple bottlenecks use the existing
+deterministic obligation-focus scheduler. The develop target is unchanged, and the
+persisted focus counts toward ordinary obligation-level ideation. Global/unrelated
+obligations and separate primary frontier develops do not acquire inferred focus.
+
 At the limit, another continuation is unavailable and a primary-object synthesis
 move can consume up to four live artifacts from that route, preferring its protocol
 components, lemmas and findings in deterministic order. This consolidates the
@@ -604,8 +614,16 @@ graph merely because they are the operation target. Expansion starts from the
 focus, consumed/exploited objects, non-input targets, and selected construction
 components. A continuation includes the latest up to four live artifacts owned
 by its persisted construction route and their explicit forward dependencies.
-Synthesis includes consumed artifacts and their explicit dependencies. Proof and
-attack also include direct evidence and obstruction/counterexample relations.
+Synthesis includes consumed artifacts and their explicit dependencies. Prove also
+includes direct evidence and obstruction/counterexample relations. Attack uses
+the exact target and focus, cited forward premises (including bypass replacements),
+direct `SUPPORTS` evidence, and negative evidence directly attached to those objects
+or their premises. Live owning roots provide structural context without expanding
+siblings. Negative evidence's generic relevance references do not pull further
+siblings; its explicit premise dependencies remain available. Explicitly cited
+`DEPENDS_ON`/`USES` chains and their refutations remain available even when historical,
+so a cited failed premise can be scrutinized. Unselected historical branches and
+broad positive reverse neighborhoods stay excluded.
 Forward dependency chains are traversed completely, with cycle detection and
 contract inputs as traversal boundaries. Superseded or route-inactive branches
 are excluded unless explicitly selected; selected historical artifacts retain
@@ -615,6 +633,11 @@ Attributes, attached sources, links, selections, relations, and epistemic
 partitions are filtered to that view. Missing mandatory IDs fail clearly.
 `context_scope` records included and expansion-anchor IDs and full/focused counts,
 both in the prompt and in the execution receipt's `context_scope_json` column.
+Top-level ideation uses the same pure scoping helper with the full input contract,
+live route roots, the latest up to four live artifacts per root, directly attached
+negative evidence, and current trigger entities with their dependencies. Triggers
+owned only by inactive routes do not cause an ideation call. Its receipt also stores
+normal `context_scope` telemetry. Obligation-level ideation scoping is unchanged.
 The receipt also retains exact `prompt_utf8_bytes`. Omission means
 only that this bounded execution policy did not select the entity; it is not a
 scientific relevance judgment. Prompts contain only the supplied focused graph
