@@ -235,6 +235,10 @@ def research_command(
         max=MAX_CONTROLLER_CALLS,
         help="Maximum execution calls; strategy and ideation share an equally sized planning-call allowance.",
     ),
+    max_cost_usd: float | None = typer.Option(
+        None, "--max-cost-usd", min=0,
+        help="Maximum API cost for this invocation, including planning; defaults to research_invocation_budget_usd.",
+    ),
 ):
     """Run the bounded adaptive controller for an active research workstream."""
     require_workspace()
@@ -243,19 +247,23 @@ def research_command(
     if strategy not in {"auto", "off"}:
         raise typer.BadParameter("strategy must be auto or off")
     outcome = run_research(
-        workstream_id, provider, max_calls=max_calls, strategy=strategy
+        workstream_id, provider, max_calls=max_calls, strategy=strategy, max_cost_usd=max_cost_usd
     )
     strategy_display = (
         f"{outcome.strategy_calls_made} strategist call(s), "
         + (f"{outcome.ideation_calls_made} ideation call(s), " if outcome.ideation_calls_made else "")
         + f"{outcome.total_api_calls_made} total API call(s), "
-        if outcome.strategy_calls_made else ""
+        if outcome.strategy_calls_made or outcome.ideation_calls_made else ""
     )
     console.print(
         f"[green]Research controller stopped[/green]: {escape(outcome.stop_reason)}; "
         f"{outcome.calls_made} execution call(s), {strategy_display}"
         f"{len(outcome.artifact_ids)} artifact(s), "
         f"status {escape(outcome.final_status)}."
+    )
+    console.print(
+        f"Invocation API spend: ${outcome.invocation_spend_usd:.4f} "
+        f"/ ${outcome.invocation_budget_usd:.4f} cap."
     )
     render_research_report(build_research_report(workstream_id), console)
 

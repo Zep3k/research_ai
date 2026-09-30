@@ -10,6 +10,7 @@ class Config(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     monthly_budget_usd: float = Field(default=100.0, gt=0)
+    research_invocation_budget_usd: float = Field(default=1.50, ge=0, allow_inf_nan=False)
     openai_model: str = "gpt-6-sol"
     anthropic_model: str = "claude-opus-5-5"
     research_develop_model: str = "gpt-6-luna"

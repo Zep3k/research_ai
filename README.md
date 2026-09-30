@@ -281,7 +281,7 @@ The `research` controller is deliberately bounded, graph-scoped, and auditable. 
 ```bash
 theory workstream create research "Advance and stress-test the candidate"
 theory workstream link 3 2 input
-theory research 3 --max-calls 4
+theory research 3 --max-calls 4 --max-cost-usd 1.50
 theory workstream show 3
 ```
 
@@ -366,6 +366,17 @@ calls remain ≤ `2 * max_calls`. Ideation requires two available planning slots
 `--strategy off`. When planning slots are spent, execution uses the deterministic
 legal baseline. `ResearchOutcome.calls_made` retains its execution-only meaning,
 alongside `strategy_calls_made`, `ideation_calls_made`, and `total_api_calls_made`.
+
+Every invocation also has a dollar cap: `research_invocation_budget_usd` in
+`.theory/config.json` defaults to **$1.50**, and `--max-cost-usd` overrides it for
+that invocation. All ideation, strategist, and execution calls share this cap,
+including Anthropic attacks. Before each request, actual recorded invocation spend
+plus the conservative cost bound for the next call must fit. A refused request
+creates no API receipt or execution iteration; the controller completes normally
+with `invocation_budget_exhausted`. CLI output reports actual spend and the cap.
+Returned usage on failed calls counts toward actual spend. Resuming an active
+workstream starts a fresh invocation allowance; historical costs still count
+against the independent monthly budget, which is checked first.
 
 Ideation is eligible after concrete refutation, an alternative-route reframe,
 unresolved synthesis of complementary inputs without a new obligation candidate
@@ -662,7 +673,7 @@ The controller stops when:
 - the call limit is reached; or
 - the local budget guard refuses the next call.
 
-Success or call-limit completion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Each budget refusal happens before the refused request or its execution iteration is recorded and leaves the workstream active. Any earlier paid strategy receipt is retained. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
+Success, call-limit completion, or invocation-budget exhaustion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Each budget refusal happens before the refused request or its execution iteration is recorded. Monthly-budget refusal leaves the workstream active. Any earlier paid planning receipt is retained. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
 
 `human_judgment_required=true` is accepted only for `develop` targeting a supplied
 `role=input` problem-contract entity. The prompt reserves it for explicit contract/model

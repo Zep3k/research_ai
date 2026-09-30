@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
+from decimal import Decimal
+from math import fsum
 from typing import Any, Callable
 
 from pydantic import BaseModel
@@ -11,6 +14,34 @@ from .errors import BudgetExceededError, ModelOutputError, TheoryError
 from .models import ModelResult
 from .prompts import Prompt, render_prompt
 from .providers import conservative_call_cost
+
+
+@dataclass
+class InvocationBudget:
+    """Local allowance charged only for this invocation's metered receipts."""
+
+    cap_usd: float
+    call_ids: list[int] = field(default_factory=list)
+
+    def _recorded_costs(self) -> tuple[float, ...]:
+        if not self.call_ids:
+            return ()
+        with connect() as con:
+            rows = con.execute(
+                f"SELECT cost_usd FROM api_calls WHERE id IN ({','.join('?' for _ in self.call_ids)}) "
+                "AND status IN ('completed','failed')", self.call_ids,
+            ).fetchall()
+        return tuple(row["cost_usd"] for row in rows)
+
+    @property
+    def actual_spend_usd(self) -> float:
+        return fsum(self._recorded_costs())
+
+    def can_fit(self, conservative_cost_usd: float) -> bool:
+        # Decimal comparison preserves admission at an exact dollar boundary;
+        # no epsilon may permit a call above the configured cap.
+        spent = sum((Decimal(str(cost)) for cost in self._recorded_costs()), Decimal(0))
+        return spent + Decimal(str(conservative_cost_usd)) <= Decimal(str(self.cap_usd))
 
 
 def budget_guard(
@@ -114,6 +145,7 @@ def call_model(
     validate_response: Callable[[str], None] | None = None,
     planning_metadata: dict | None = None,
     on_started: Callable[[int], None] | None = None,
+    invocation_budget: InvocationBudget | None = None,
 ) -> ModelResult:
     call_id = _start_call(
         run_id=run_id,
@@ -125,6 +157,8 @@ def call_model(
         prompt_utf8_bytes=len(render_prompt(prompt).encode("utf-8")),
         planning_metadata=planning_metadata,
     )
+    if invocation_budget is not None:
+        invocation_budget.call_ids.append(call_id)
     try:
         if on_started is not None:
             on_started(call_id)

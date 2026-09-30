@@ -5,7 +5,8 @@ import json
 import re
 from collections.abc import Sequence
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from math import isfinite
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -22,7 +23,7 @@ from .graph import (
     set_workstream_status,
 )
 from .jsonutil import parse_json_model
-from .model_calls import budget_guard, call_model
+from .model_calls import InvocationBudget, budget_guard, call_model
 from .paths import STATE_DIR
 from .providers import Provider, get_model_spec, get_provider
 from .research_context import ResearchContext, focus_research_context, for_workstream
@@ -653,6 +654,8 @@ class ResearchOutcome:
     final_status: str
     strategy_calls_made: int = 0
     ideation_calls_made: int = 0
+    invocation_spend_usd: float = 0.0
+    invocation_budget_usd: float = 1.50
 
     @property
     def total_api_calls_made(self) -> int:
@@ -2964,6 +2967,7 @@ def _reconcile_stale_research(workstream_id: int) -> tuple[int, int]:
 def research(
     workstream_id: int, provider_name: str = "auto", *, max_calls: int,
     strategy: Literal["auto", "off"] = "auto",
+    max_cost_usd: float | None = None,
 ) -> ResearchOutcome:
     if not 1 <= max_calls <= MAX_CONTROLLER_CALLS:
         raise TheoryError(
@@ -2972,17 +2976,27 @@ def research(
     if strategy not in {"auto", "off"}:
         raise ConfigurationError(f"Unknown research strategy: {strategy}")
     cfg = Config.load()
+    invocation_cap = cfg.research_invocation_budget_usd if max_cost_usd is None else max_cost_usd
+    if not isfinite(invocation_cap) or invocation_cap < 0:
+        raise ConfigurationError("max_cost_usd must be finite and nonnegative.")
     if provider_name not in {"auto", "openai", "anthropic"}:
         raise ConfigurationError(f"Unknown provider override: {provider_name}")
     with _research_controller_lock(workstream_id):
-        return _run_research(
-            workstream_id, provider_name, max_calls=max_calls, strategy=strategy, cfg=cfg
+        invocation_budget = InvocationBudget(invocation_cap)
+        outcome = _run_research(
+            workstream_id, provider_name, max_calls=max_calls, strategy=strategy, cfg=cfg,
+            invocation_budget=invocation_budget,
+        )
+        return replace(
+            outcome, invocation_spend_usd=invocation_budget.actual_spend_usd,
+            invocation_budget_usd=invocation_cap,
         )
 
 
 def _run_research(
     workstream_id: int, provider_name: str = "auto", *, max_calls: int,
     strategy: Literal["auto", "off"] = "auto", cfg: Config,
+    invocation_budget: InvocationBudget,
 ) -> ResearchOutcome:
     """At most max_calls executions and max_calls planning calls (strategy + ideation).
 
@@ -3010,6 +3024,19 @@ def _run_research(
     last_iteration_id: int | None = None
     current_run_consecutive_no_progress = 0
     providers: dict[str, Provider] = {}
+
+    def invocation_budget_stop(purpose: str, conservative_cost: float) -> ResearchOutcome:
+        _finalize(
+            workstream_id=workstream_id, iteration_id=last_iteration_id,
+            status="completed", stop_reason="invocation_budget_exhausted",
+            detail=(f"The next {purpose} call cannot fit: "
+                    f"${invocation_budget.actual_spend_usd:.4f} actual invocation spend + "
+                    f"up to ${conservative_cost:.4f} > ${invocation_budget.cap_usd:.4f} invocation cap."),
+        )
+        return ResearchOutcome(
+            workstream_id, calls_made, tuple(iteration_ids), tuple(artifact_ids),
+            "invocation_budget_exhausted", "completed", strategy_calls_made, ideation_calls_made,
+        )
 
     while calls_made < max_calls:
         reactivate_bypassed_obligations(workstream_id)
@@ -3061,6 +3088,8 @@ def _run_research(
                     max_output_tokens=IDEATION_MAX_OUTPUT_TOKENS,
                     purpose="research:ideate", response_model=IdeaBatch,
                 )
+                if not invocation_budget.can_fit(estimated_cost):
+                    return invocation_budget_stop("research:ideate", estimated_cost)
                 call_ids: list[int] = []
                 try:
                     if spec.provider not in providers:
@@ -3078,6 +3107,7 @@ def _run_research(
                         estimated_max_cost_usd=estimated_cost, response_model=IdeaBatch,
                         effort="high", validate_response=validate_ideation,
                         planning_metadata=trigger.metadata(history), on_started=call_ids.append,
+                        invocation_budget=invocation_budget,
                     )
                     ideation_calls_made += 1
                     ideation_call_id = call_ids[0]
@@ -3109,6 +3139,8 @@ def _run_research(
                 max_output_tokens=STRATEGIST_MAX_OUTPUT_TOKENS, purpose="research:strategy",
                 response_model=StrategistDecision,
             )
+            if not invocation_budget.can_fit(strategy_cost):
+                return invocation_budget_stop("research:strategy", strategy_cost)
             try:
                 if "openai" not in providers:
                     providers["openai"] = get_provider("openai")
@@ -3124,6 +3156,7 @@ def _run_research(
                     estimated_max_cost_usd=strategy_cost,
                     response_model=StrategistDecision, effort="medium",
                     validate_response=validate_strategy,
+                    invocation_budget=invocation_budget,
                 )
                 strategy_calls_made += 1
                 selection = select_research_move(
@@ -3164,6 +3197,8 @@ def _run_research(
             purpose=f"research:{choice.operation}",
             response_model=response_model,
         )
+        if not invocation_budget.can_fit(estimated_max_cost):
+            return invocation_budget_stop(f"research:{choice.operation}", estimated_max_cost)
         if route.provider not in providers:
             try:
                 providers[route.provider] = get_provider(route.provider)
@@ -3200,6 +3235,7 @@ def _run_research(
                 validate_response=(lambda text: _validate_step_report(
                     _parse_execution_report(text, response_model), model_context, choice,
                 )) if choice.operation == "attack" else None,
+                invocation_budget=invocation_budget,
             )
             calls_made += 1
             report = _parse_execution_report(result.text, response_model)
