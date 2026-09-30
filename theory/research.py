@@ -43,6 +43,7 @@ from .research_routes import ROUTE_IDS, STARTED_AT, SUPERSEDED_BY, record_constr
 STRATEGIST_MAX_OUTPUT_TOKENS = 4000
 RESEARCH_MAX_OUTPUT_TOKENS = 12_000
 MAX_CONTROLLER_CALLS = 20
+MAX_CONSTRUCTIVE_CONTINUATIONS = 3
 INTERRUPTED_ITERATION_ERROR = (
     "Interrupted before controller completion; reconciled as abandoned before a new "
     "research invocation."
@@ -1502,6 +1503,93 @@ def _obligation_frontier_choice(
     )
 
 
+def _develop_resets_construction_streak(
+    context: ResearchContext, iteration: dict,
+) -> bool:
+    return any(
+        _attribute(context, entity_id, "research_artifact_type") in {"proof_attempt", "proof_obligation"}
+        or _attribute(context, entity_id, "research_branch_status") == "promising"
+        for entity_id in _stored_id_set(iteration.get("artifact_ids_json"))
+    )
+
+
+def _iteration_construction_routes(context: ResearchContext, iteration: dict) -> frozenset[int]:
+    accepted = _stored_id_set(iteration.get("artifact_ids_json"))
+    started = frozenset(i for i in accepted
+                        if _attribute(context, i, STARTED_AT) == str(iteration.get("id")))
+    if started:
+        return started
+    anchors = accepted | _stored_id_set(iteration.get("consumed_entity_ids_json"))
+    anchors |= {iteration["target_entity_id"], iteration.get("focus_obligation_id")}
+    return frozenset().union(*(
+        _stored_id_set(context.attributes.get(i, {}).get(ROUTE_IDS)) for i in anchors
+    ))
+
+
+def _constructive_continuation_streak(
+    context: ResearchContext, history: tuple[dict, ...],
+) -> tuple[frozenset[int], int]:
+    """Reconstruct consecutive completed continuations from route-owned receipts.
+
+    Shared ancestry retains the same route through the intersection of owners.
+    Failed calls do not interrupt the scientific execution path. No process-local
+    counter or artifact-age cutoff is used.
+    """
+    route: frozenset[int] = frozenset()
+    streak = 0
+    previous: dict | None = None
+    for row in _scientific_history(history):
+        roots = _iteration_construction_routes(context, row)
+        continuation = (row["operation"] == "develop"
+                        and (row.get("selected_move_id") or "").endswith(":continue"))
+        if (row["operation"] == "develop" and not roots and previous is not None
+                and previous["operation"] == "develop"
+                and previous["target_entity_id"] == row["target_entity_id"]):
+            roots = route  # Duplicate-only development retains its route.
+        common = route & roots
+        if (row["operation"] == "develop" and roots
+                and not _develop_resets_construction_streak(context, row)):
+            streak = (streak if common else 0) + int(continuation)
+            route = common or roots
+        else:
+            streak = 0
+            route = roots
+        previous = row
+    return route, streak
+
+
+def _route_consolidation_choice(
+    context: ResearchContext, workstream_id: int, primary_id: int,
+    history: tuple[dict, ...], open_obligations: tuple[int, ...],
+) -> OperationChoice | None:
+    route, streak = _constructive_continuation_streak(context, history)
+    live_routes = route & live_construction_route_ids(context)
+    if streak < MAX_CONSTRUCTIVE_CONTINUATIONS or not live_routes:
+        return None
+    linked = _linked_ids(context, workstream_id) - _input_ids(context, workstream_id) - {primary_id}
+    candidates = [
+        int(entity["id"]) for entity in context.entities
+        if int(entity["id"]) in linked
+        and entity["entity_type"] in SYNTHESIS_INPUT_TYPES
+        and _stored_id_set(_attribute(context, int(entity["id"]), ROUTE_IDS)) & live_routes
+        and _route_entity_is_live(context, int(entity["id"]))
+    ]
+    # Prefer construction components and their lemmas/findings, then newest
+    # accepted artifacts within that group. IDs provide stable tie breaking.
+    candidates.sort(key=lambda i: (
+        _attribute(context, i, "research_artifact_type") not in {"protocol_component", "lemma", "finding"},
+        -i,
+    ))
+    consumed = tuple(candidates[:4])
+    if len(consumed) < 2 or not _is_new_synthesis_input_set(history, primary_id, consumed):
+        return None
+    return OperationChoice(
+        "synthesize", primary_id,
+        "Consolidate the unfinished construction into a testable candidate and/or explicit obligations.",
+        consumed_entity_ids=consumed, open_obligation_ids=open_obligations,
+    )
+
+
 def _constructive_continuation(
     context: ResearchContext, workstream_id: int, history: tuple[dict, ...],
     open_obligations: tuple[int, ...],
@@ -1510,8 +1598,10 @@ def _constructive_continuation(
 
     Obligation-only expansion, duplicate output, a finished candidate, or an
     intervening operation does not earn another construction step. Existing
-    call/stagnation bounds still apply; this does not close any obligation.
+    call/stagnation bounds still apply. Three route-local continuations lead to
+    a consolidation checkpoint; this does not close any obligation.
     """
+    history = _scientific_history(history)
     if not history:
         return None
     previous = history[-1]
@@ -1527,10 +1617,9 @@ def _constructive_continuation(
     accepted = _stored_id_set(previous.get("artifact_ids_json"))
     if any(
         _attribute(context, entity_id, "research_artifact_type") == "proof_attempt"
-        or (_attribute(context, entity_id, "research_artifact_type") == "protocol_component"
-            and _attribute(context, entity_id, "research_branch_status") == "promising")
+        or _attribute(context, entity_id, "research_branch_status") == "promising"
         for entity_id in accepted
-    ):
+    ) or _constructive_continuation_streak(context, history)[1] >= MAX_CONSTRUCTIVE_CONTINUATIONS:
         return None
     if not any(
         _attribute(context, entity_id, "research_artifact_type") == "protocol_component"
@@ -1630,6 +1719,13 @@ def choose_next_operation(
             and primary["entity_type"] in PRECISE_ENTITY_TYPES
         )
     ]
+    consolidation = _route_consolidation_choice(context, workstream_id, primary_id, history, open_obligations)
+    if consolidation is not None and all(
+        _attribute(context, int(entity["id"]), "research_artifact_type") == "protocol_component"
+        and _attribute(context, int(entity["id"]), "research_branch_status") == "unresolved"
+        for entity in non_primary_prove_candidates
+    ):
+        return consolidation
     if non_primary_prove_candidates:
         target_id = int(non_primary_prove_candidates[0]["id"])
         return OperationChoice(
@@ -1787,6 +1883,7 @@ def generate_legal_research_moves(
     history = _scientific_history(history)
     baseline = choose_next_operation(context, workstream_id, primary, history)
     open_ids = _open_obligation_ids(context, workstream_id, int(primary["id"]))
+    consolidation = _route_consolidation_choice(context, workstream_id, int(primary["id"]), history, open_ids)
     if open_ids:
         choices = ([baseline] if baseline.continue_construction else []) + [
             _obligation_frontier_choice(
@@ -1830,7 +1927,7 @@ def generate_legal_research_moves(
                         "attack", entity_id,
                         f"Proof candidate #{entity_id} is precise and has no completed bounded attack.",
                     ))
-        if strategy_enabled and baseline.operation in {"prove", "attack"}:
+        if strategy_enabled and (baseline.operation in {"prove", "attack"} or consolidation is not None):
             choices.append(OperationChoice(
                 operation="develop",
                 target_entity_id=int(primary["id"]),
@@ -1840,6 +1937,8 @@ def generate_legal_research_moves(
                 ),
                 develop_provenance="frontier",
             ))
+    if consolidation is not None:
+        choices.append(consolidation)
     if strategy_enabled:
         for bundle in _primary_synthesis_bundles(context, workstream_id, int(primary["id"]), history):
             choices.append(OperationChoice(

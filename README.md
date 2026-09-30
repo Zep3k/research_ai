@@ -534,6 +534,21 @@ ownership from completed controller artifact receipts and recorded develop prove
 Objects with no reconstructible route remain neutral. Scheduling order, artifact age
 and strategist preferences never establish route inactivity.
 
+Construction continuation is bounded per persisted route by
+`MAX_CONSTRUCTIVE_CONTINUATIONS = 3`. The streak counts completed continuation
+develops; failed calls do not advance or interrupt it. Route changes, other research
+operations, and develops that emit proof obligations, proof attempts or promising
+candidates reset it. Resume reconstructs the count from iteration receipts and route
+ownership.
+
+At the limit, another continuation is unavailable and a primary-object synthesis
+move can consume up to four live artifacts from that route, preferring its protocol
+components, lemmas and findings in deterministic order. This consolidates the
+unfinished construction into a testable candidate and/or explicit obligations through
+the existing synthesis operation. The strategist can compare it with other legal
+moves; deterministic fallback selects it when the remaining candidates are unfinished
+components. The route and its unresolved components remain persisted and live.
+
 Bypass provenance and its outcome strings were introduced in schema **11**.
 Historical `necessary`/`unnecessary` outcomes
 and `obligation_retracted` events remain readable. Legacy `unnecessary` states lacking
