@@ -13,6 +13,7 @@ from .db import connect
 from .errors import ModelOutputError
 from .jsonutil import parse_json_model
 from .prompts import PromptContent
+from .research_routes import route_entity_is_live
 
 if TYPE_CHECKING:
     from .research_context import ResearchContext
@@ -73,6 +74,7 @@ class IdeationTrigger:
     reason: str
     entity_ids: tuple[int, ...]
     iteration_ids: tuple[int, ...] = ()
+    focus_obligation_id: int | None = None
 
     @property
     def key(self) -> str:
@@ -81,14 +83,54 @@ class IdeationTrigger:
         ).encode()).hexdigest()
 
     def metadata(self, history: tuple[dict, ...]) -> dict:
-        return {"trigger": self.reason, "trigger_key": self.key,
+        metadata = {"trigger": self.reason, "trigger_key": self.key,
                 "entity_ids": list(self.entity_ids), "iteration_ids": list(self.iteration_ids),
                 "history_anchor": max((r.get("id", 0) for r in history), default=0),
                 "selected_idea_id": None, "execution_iteration_id": None}
+        if self.focus_obligation_id is not None:
+            metadata["focus_obligation_id"] = self.focus_obligation_id
+        return metadata
+
+
+def _obligation_triggers(
+    context: ResearchContext, completed: tuple[dict, ...], open_obligation_ids: tuple[int, ...],
+) -> tuple[IdeationTrigger, ...]:
+    """Count accepted local attempts after the last persisted state transition."""
+    triggers = []
+    for obligation in sorted(open_obligation_ids):
+        if not route_entity_is_live(context, obligation):
+            continue
+        attempts = []
+        # Reconciliation outside an iteration also records a durable reopening.
+        reactivations = json.loads(context.attributes.get(obligation, {}).get(
+            "research_bypass_reactivation_events", "[]"))
+        reopened_at = max((e.get("timestamp", "") for e in reactivations), default="")
+        for row in completed:
+            events = json.loads(row.get("progress_events_json") or "[]")
+            reset = any(
+                event["kind"] in {"obligation_resolved", "obligation_reactivated",
+                                  "obligation_bypassed", "obligation_retracted"}
+                and obligation in event.get("obligation_ids", []) for event in events
+            )
+            if reset:
+                attempts.clear()
+                continue
+            if reopened_at and (row.get("created_at") or "") <= reopened_at:
+                continue
+            focus = row.get("focus_obligation_id") or row.get("target_entity_id")
+            if (focus == obligation and row["operation"] in {"develop", "synthesize"}
+                    and json.loads(row.get("artifact_ids_json") or "[]")):
+                attempts.append(int(row["id"]))
+        if len(attempts) >= 2:
+            triggers.append(IdeationTrigger(
+                "repeated_obligation_failure", (obligation,), tuple(attempts), obligation,
+            ))
+    return tuple(triggers)
 
 
 def choose_ideation_trigger(
     context: ResearchContext, history: tuple[dict, ...], previous: tuple[dict, ...],
+    *, open_obligation_ids: tuple[int, ...] = (),
 ) -> IdeationTrigger | None:
     """Use graph/iteration evidence, never domain keywords or a known solution."""
     completed = tuple(r for r in history if r["status"] == "completed")
@@ -104,7 +146,7 @@ def choose_ideation_trigger(
              or context.attributes.get(int(e["id"]), {}).get("research_attack_state") == "challenged"
              or (e["entity_type"] == "Obstruction" and context.attributes.get(int(e["id"]), {}).get("research_branch_status") in {"blocked", "failed", "refuted"})
              or (e["entity_type"] == "FailedApproach" and context.attributes.get(int(e["id"]), {}).get("research_branch_status") in {"failed", "refuted"}))))
-    options = []
+    options = list(_obligation_triggers(context, completed, open_obligation_ids))
     if negative:
         options.append(IdeationTrigger("concrete_refutation", negative))
     for row in reversed(completed[-3:]):
@@ -145,18 +187,33 @@ Return ONLY strict JSON matching the supplied IdeaBatch schema; no additional fi
 
 
 def build_ideation_prompt(context: ResearchContext, contract: tuple, trigger: IdeationTrigger) -> PromptContent:
+    instructions = IDEATION_INSTRUCTIONS
+    if trigger.focus_obligation_id is not None:
+        instructions += """
+Generate approaches specifically for the supplied open focus obligation on its live
+construction route. Every idea must explicitly reference that obligation and at least
+one supplied contract input. Prefer simpler or weaker sufficient mechanisms before
+adding machinery. Do not merely repeat recorded failed approaches: use the supplied
+obstructions and failure evidence to identify what each proposed mechanism changes.
+Keep the parent construction and full problem contract intact; this is local mechanism
+exploration, not a new top-level route or an assumption that the obligation is solved.
+"""
+    state = {
+        "trigger": trigger.reason,
+        "trigger_entity_ids": trigger.entity_ids,
+        "problem_contract": [c.model_dump() for c in contract],
+        "graph": context.as_model_payload(),
+    }
+    if trigger.focus_obligation_id is not None:
+        state["focus_obligation_id"] = trigger.focus_obligation_id
     return PromptContent(
-        stable_prefix=IDEATION_INSTRUCTIONS + "\n\n",
-        dynamic_suffix="IDEATION STATE\n" + json.dumps({
-            "trigger": trigger.reason,
-            "trigger_entity_ids": trigger.entity_ids,
-            "problem_contract": [c.model_dump() for c in contract],
-            "graph": context.as_model_payload(),
-        }, sort_keys=True, ensure_ascii=False),
+        stable_prefix=instructions + "\n\n",
+        dynamic_suffix="IDEATION STATE\n" + json.dumps(state, sort_keys=True, ensure_ascii=False),
     )
 
 
-def validate_ideas(batch: IdeaBatch, context: ResearchContext, contract_ids: set[int]) -> None:
+def validate_ideas(batch: IdeaBatch, context: ResearchContext, contract_ids: set[int],
+                   *, focus_obligation_id: int | None = None) -> None:
     allowed = {int(entity["id"]) for entity in context.entities}
     for idea in batch.ideas:
         refs = [use.entity_id for use in idea.exploits]
@@ -164,6 +221,8 @@ def validate_ideas(batch: IdeaBatch, context: ResearchContext, contract_ids: set
             raise ModelOutputError("Idea references must be unique supplied graph entity IDs.")
         if not set(refs) & contract_ids:
             raise ModelOutputError("Each idea must explicitly reference its supplied problem contract.")
+        if focus_obligation_id is not None and focus_obligation_id not in refs:
+            raise ModelOutputError("Each local idea must explicitly reference its focus obligation.")
 
 
 def previous_ideations(workstream_id: int) -> tuple[dict, ...]:

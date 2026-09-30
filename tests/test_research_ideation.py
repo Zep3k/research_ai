@@ -14,7 +14,7 @@ from theory.errors import BudgetExceededError, ModelOutputError
 from theory.graph import add_entity, link_workstream_entity, set_attribute
 from theory.models import ModelResult
 from theory.prompts import render_prompt
-from theory.research import research, _research_prompt_sections, OperationChoice
+from theory.research import RESEARCH_MAX_OUTPUT_TOKENS, research, _research_prompt_sections, OperationChoice
 from theory.research_context import for_workstream
 from theory.research_ideation import (
     IdeaBatch, IdeationTrigger, build_ideation_prompt,
@@ -109,7 +109,7 @@ def test_case02b_exposes_selects_and_executes_simplification_with_provenance(cas
     assert trace["model"] == Config.load().research_ideation_model
     execution_requests = [r for r in provider.requests if r["response_model"].__name__ == "ResearchStepReport"]
     assert [r["model"] for r in execution_requests] == ["gpt-6-sol", "gpt-6-sol"]
-    assert all(r["max_output_tokens"] == 12_000 for r in execution_requests)
+    assert all(r["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS for r in execution_requests)
     with connect() as con:
         execution_calls = [dict(r) for r in con.execute(
             "SELECT model,purpose,estimated_max_cost_usd,status FROM api_calls "
@@ -147,7 +147,7 @@ def test_idea_origin_survives_second_continuation_and_resume(case02b, monkeypatc
     execution = [request for request in provider.requests
                  if request["response_model"].__name__ == "ResearchStepReport"]
     assert [request["model"] for request in execution] == ["gpt-6-sol"] * 3
-    assert all(request["max_output_tokens"] == 12_000 for request in execution)
+    assert all(request["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS for request in execution)
     assert all("research_develop_provenance" not in request["prompt"]
                for request in provider.requests)
     assert decision_from_prompt(execution[1]["prompt"]).get("selected_idea") is None

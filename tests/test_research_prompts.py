@@ -29,6 +29,8 @@ CASES = (
 # prefer constructive continuation and avoid mandatory branch/obligation breadth.
 # Case 02B fixes update strategist comparison prose and wrap attack examples in
 # an outcome-variant envelope. Decision/context fingerprints remain unchanged.
+# Explicit refutation scope adds refutes_entity_ids and relevance/scope instructions
+# to execution prompts. Strategist criteria and decision/context remain unchanged.
 BASELINE = json.loads(
     (Path(__file__).parent / "fixtures" / "research_prompt_baseline.json").read_text()
 )

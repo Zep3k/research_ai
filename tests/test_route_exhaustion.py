@@ -190,9 +190,9 @@ def test_established_routes_can_still_exhaust_without_calling_a_provider(fresh, 
     elif cause in {"relation", "owned_negative"}:
         negative = add_work(ws, "obstruction", route=root, state="blocked",
                             related=(root,) if cause == "owned_negative" else ())
-        if cause == "relation":
-            with connect() as con:
-                add_relation(con, negative, "BLOCKS", root)
+        with connect() as con:
+            # Ownership and relevance alone never establish refutation scope.
+            add_relation(con, negative, "BLOCKS" if cause == "relation" else "REFUTES", root)
     else:
         replacement, = append_step(ws, primary)
         mark(root, **{SUPERSEDED_BY: json.dumps([replacement])})

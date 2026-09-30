@@ -41,12 +41,13 @@ from .research_progress import (
 from .research_routes import (
     CONSTRUCTION_TYPES, ROUTE_IDS, STARTED_AT, record_construction_routes,
     live_construction_route_ids, persisted_id_set as _stored_id_set,
+    entity_has_closing_relation,
     route_entity_is_live as _route_entity_is_live,
 )
 
 
 STRATEGIST_MAX_OUTPUT_TOKENS = 4000
-RESEARCH_MAX_OUTPUT_TOKENS = 12_000
+RESEARCH_MAX_OUTPUT_TOKENS = 16_000
 MAX_CONTROLLER_CALLS = 20
 MAX_CONSTRUCTIVE_CONTINUATIONS = 3
 INTERRUPTED_ITERATION_ERROR = (
@@ -177,6 +178,7 @@ class ResearchArtifact(BaseModel):
     material_key: str = Field(pattern=r"^[a-z0-9][a-z0-9_]{2,79}$")
     epistemic_status: Literal["inference", "speculation", "unresolved"]
     related_entity_ids: list[int] = Field(min_length=1, max_length=24)
+    refutes_entity_ids: list[int] = Field(default_factory=list, max_length=24)
     source_ids: list[int] = Field(default_factory=list, max_length=20)
     branch_status: BranchStatus
 
@@ -185,13 +187,15 @@ class ResearchArtifact(BaseModel):
     def strip_nonempty_text(cls, value: str) -> str:
         return _strip_nonempty(value)
 
-    @field_validator("related_entity_ids", "source_ids")
+    @field_validator("related_entity_ids", "refutes_entity_ids", "source_ids")
     @classmethod
     def positive_unique_ids(cls, values: list[int]) -> list[int]:
         return _positive_unique_ids(values)
 
     @model_validator(mode="after")
     def validate_branch_status(self) -> "ResearchArtifact":
+        if self.refutes_entity_ids and self.artifact_type not in CRITICAL_ARTIFACT_TYPES:
+            raise ValueError("Only negative artifacts may explicitly refute existing entities")
         if self.branch_status in {"failed", "refuted"} and self.artifact_type != "failed_approach":
             raise ValueError("failed/refuted branches must be failed_approach artifacts")
         if self.branch_status == "blocked" and self.artifact_type not in {
@@ -780,7 +784,7 @@ def _attribute(context: ResearchContext, entity_id: int, key: str) -> str | None
 
 def _is_precise_candidate(context: ResearchContext, entity: dict) -> bool:
     entity_id = int(entity["id"])
-    if entity["status"] != "active" or entity["trust_state"] == "contradicted":
+    if not _route_entity_is_live(context, entity_id):
         return False
     if entity["entity_type"] in PRECISE_ENTITY_TYPES:
         return True
@@ -876,7 +880,10 @@ def _obligation_route_activity(
         i: _stored_id_set(_attribute(context, i, ROUTE_IDS)) for i in obligation_ids
     }
     live_routes = live_construction_route_ids(context)
-    route_allowed = {i for i, roots in route_owned.items() if not roots or roots & live_routes}
+    route_allowed = {
+        i for i, roots in route_owned.items()
+        if (not roots or roots & live_routes) and not entity_has_closing_relation(context, i)
+    }
     # Bypass descendants still require an attached parent. Ordinary ownership
     # may be shared across routes even when an older parent route was superseded.
     bypass_descendants = set(owners)
@@ -930,27 +937,7 @@ def _candidate_has_unresolved_critical_issue(
     prior_attack_state = _attribute(context, candidate_id, "research_attack_state")
     if prior_attack_state in {"challenged", "inconclusive"}:
         return True
-    if any(
-        entity["entity_type"] in {"Counterexample", "Obstruction", "FailedApproach"}
-        and entity["status"] == "active"
-        and candidate_id
-        in _stored_id_set(
-            context.attributes.get(int(entity["id"]), {}).get("related_entity_ids")
-        )
-        for entity in context.entities
-    ):
-        return True
-    return any(
-        (
-            relation["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"}
-            and int(relation["target_entity_id"]) == candidate_id
-        )
-        or (
-            relation["relation_type"] == "FAILS_AT"
-            and int(relation["source_entity_id"]) == candidate_id
-        )
-        for relation in context.relations
-    )
+    return entity_has_closing_relation(context, candidate_id)
 
 
 def _candidate_meets_obligation_closure_structure(
@@ -1261,6 +1248,7 @@ def _relevant_unattacked_proof_attempts(
             or entity["status"] != "active"
             or entity["trust_state"] == "contradicted"
             or not _construction_entity_is_active(context, entity_id)
+            or not _route_entity_is_live(context, entity_id)
             or _completed_for_target(history, "attack", entity_id)
         ):
             continue
@@ -1355,6 +1343,33 @@ def _active_obligation_history(
     all_ids = set(_obligation_ids(context, workstream_id, primary_entity_id))
     return tuple(row for row in completed
                  if _iteration_focus_obligation_id(context, row, all_ids) not in inactive)
+
+
+def _obligation_ideation_context(
+    context: ResearchContext, workstream_id: int, primary_id: int, obligation_id: int,
+) -> ResearchContext:
+    """Retain the local premise, live owners and relevant negative evidence exactly."""
+    roots = _stored_id_set(_attribute(context, obligation_id, ROUTE_IDS)) & live_construction_route_ids(context)
+    params = dict(workstream_id=workstream_id, primary_entity_id=primary_id,
+                  target_entity_id=obligation_id, focus_obligation_id=obligation_id,
+                  operation="develop")
+    scoped = focus_research_context(context, additional_entity_ids=tuple(sorted(roots)), **params)
+    local_ids = {int(e["id"]) for e in scoped.entities} - _input_ids(context, workstream_id)
+    evidence = {
+        int(e["id"]) for e in context.entities
+        if e["entity_type"] in {"Obstruction", "Counterexample", "FailedApproach"}
+        and _construction_entity_is_active(context, int(e["id"]))
+        and (_stored_id_set(_attribute(context, int(e["id"]), "related_entity_ids")) & local_ids
+             or any(r["status"] == "active" and (
+                 r["relation_type"] in {"REFUTES", "BLOCKS", "CONTRADICTS"}
+                 and int(r["source_entity_id"]) == int(e["id"])
+                 and int(r["target_entity_id"]) in local_ids
+                 or r["relation_type"] == "FAILS_AT"
+                 and int(r["target_entity_id"]) == int(e["id"])
+                 and int(r["source_entity_id"]) in local_ids
+             ) for r in context.relations))
+    }
+    return focus_research_context(context, additional_entity_ids=tuple(sorted(roots | evidence)), **params)
 
 
 def eligible_open_obligation_ids(
@@ -2276,11 +2291,15 @@ def _validate_step_report(
             "Only synthesize may return non-empty consumed_entity_ids."
         )
     for index, artifact in enumerate(report.artifacts, start=1):
-        unknown_entities = set(artifact.related_entity_ids) - allowed_entity_ids
+        unknown_entities = (set(artifact.related_entity_ids) | set(artifact.refutes_entity_ids)) - allowed_entity_ids
         if unknown_entities:
             raise ModelOutputError(
                 f"Research artifact {index} referenced unknown/out-of-context entity IDs: "
                 + ", ".join(str(value) for value in sorted(unknown_entities))
+            )
+        if not set(artifact.refutes_entity_ids) <= set(artifact.related_entity_ids):
+            raise ModelOutputError(
+                f"Research artifact {index} must include every explicitly refuted entity in related_entity_ids."
             )
         if choice.target_entity_id not in artifact.related_entity_ids:
             raise ModelOutputError(
@@ -2517,6 +2536,11 @@ def _persist_step(
             link_workstream_entity(con, workstream_id, entity_id, "created")
             artifact_ids.append(entity_id)
             accepted.append((artifact, entity_id))
+            # Explicit structured scope is authoritative. Relevance references,
+            # including contract/route ancestors, never create closure edges.
+            for refuted_id in artifact.refutes_entity_ids:
+                add_relation(con, entity_id, "REFUTES", refuted_id,
+                             trust_state="quarantined", generated_by_llm=True)
             existing_keys.add(artifact.material_key)
             fingerprints.append(tokens)
 
@@ -2591,6 +2615,14 @@ def _persist_step(
             set_attribute(con, target, "research_necessity_audit_iteration_id", str(iteration_id))
 
         if choice.operation == "attack":
+            # A bounded critical attack explicitly challenges its selected
+            # candidate, independently of any additional contextual references.
+            if report.attack_outcome == "critical_issue":
+                for artifact, entity_id in accepted:
+                    if (artifact.artifact_type in CRITICAL_ARTIFACT_TYPES
+                            and choice.target_entity_id not in artifact.refutes_entity_ids):
+                        add_relation(con, entity_id, "REFUTES", choice.target_entity_id,
+                                     trust_state="quarantined", generated_by_llm=True)
             review_result = {
                 "critical_issue": "issue_found",
                 "no_critical_issue": "no_flaw_found",
@@ -3047,19 +3079,30 @@ def _run_research(
         ideation_call_id = None
         # Reserve both a generator and selector slot. A one-call run cannot ideate.
         if strategy_enabled and not ideation_calls_made and max_calls - strategy_calls_made >= 2:
+            open_ids = _open_obligation_ids(full_context, workstream_id, int(primary["id"]))
+            ideation_history = _active_obligation_history(
+                full_context, workstream_id, int(primary["id"]), history,
+            )
+            all_obligations = set(_obligation_ids(full_context, workstream_id, int(primary["id"])))
+            ideation_history = tuple({
+                **row, "focus_obligation_id": _iteration_focus_obligation_id(full_context, row, all_obligations),
+            } for row in ideation_history)
             trigger = choose_ideation_trigger(
-                full_context,
-                _active_obligation_history(full_context, workstream_id, int(primary["id"]), history),
-                previous_ideations(workstream_id),
+                full_context, ideation_history, previous_ideations(workstream_id),
+                open_obligation_ids=open_ids,
             )
             root_develop = next((move for move in legal_moves
                                  if move.operation == "develop" and move.target_entity_id == int(primary["id"])
                                  and move.focus_obligation_id is None), None)
-            if trigger is not None and root_develop is not None:
+            if trigger is not None and (trigger.focus_obligation_id is not None or root_develop is not None):
                 model = cfg.research_ideation_model
                 spec = get_model_spec(model)
                 contract = _problem_contract(full_context, workstream_id)
-                ideation_prompt = build_ideation_prompt(full_context, contract, trigger)
+                ideation_context = (
+                    _obligation_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.focus_obligation_id)
+                    if trigger.focus_obligation_id is not None else full_context
+                )
+                ideation_prompt = build_ideation_prompt(ideation_context, contract, trigger)
                 estimated_cost = budget_guard(
                     cfg, model=model, prompt=ideation_prompt,
                     max_output_tokens=IDEATION_MAX_OUTPUT_TOKENS,
@@ -3073,8 +3116,9 @@ def _run_research(
                         providers[spec.provider] = get_provider(spec.provider)
 
                     def validate_ideation(text: str) -> None:
-                        validate_ideas(parse_json_model(text, IdeaBatch), full_context,
-                                       {item.id for item in contract})
+                        validate_ideas(parse_json_model(text, IdeaBatch), ideation_context,
+                                       {item.id for item in contract},
+                                       focus_obligation_id=trigger.focus_obligation_id)
 
                     ideation_result = call_model(
                         run_id=None, workstream_id=workstream_id,
@@ -3085,13 +3129,15 @@ def _run_research(
                         effort="high", validate_response=validate_ideation,
                         planning_metadata=trigger.metadata(history), on_started=call_ids.append,
                         invocation_budget=invocation_budget,
+                        context_scope=ideation_context.context_scope,
                     )
                     ideation_calls_made += 1
                     ideation_call_id = call_ids[0]
                     batch = parse_json_model(ideation_result.text, IdeaBatch)
                     legal_moves += tuple(LegalResearchMove(
-                        "develop", root_develop.target_entity_id,
-                        open_obligation_ids=root_develop.open_obligation_ids,
+                        "develop", trigger.focus_obligation_id or root_develop.target_entity_id,
+                        focus_obligation_id=trigger.focus_obligation_id,
+                        open_obligation_ids=open_ids,
                         rationale="Explore this provisional alternative under the supplied contract; retain its main risk and expose missing premises.",
                         idea=idea, ideation_call_id=ideation_call_id,
                     ) for idea in batch.ideas)

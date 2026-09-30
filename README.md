@@ -329,7 +329,7 @@ Routing makes zero API calls. Providers are initialized lazily and reused across
 strategy and execution. Each iteration executes exactly one execution request,
 with automatic SDK retries disabled.
 
-The research output cap is **12,000 tokens**, used for both budget admission and
+The research output cap is **16,000 tokens**, used for both budget admission and
 the provider request. Reports should be concise; the cap is an execution budget,
 not a guarantee that every theoretical maximum-length valid report fits. Truncated
 or invalid output fails the iteration without a repair call or escalation.
@@ -384,8 +384,26 @@ awaiting testing, or three completed develop/synthesis
 steps without resolution. It requires an existing primary develop move. Persisted
 call metadata enforces a three-completed-iteration cooldown across invocations and
 prevents repeating the same trigger. Existing terminal/stagnation stops still apply.
-`research_ideation_model` defaults to `gpt-6-sol` at high effort with a 4,000-token
+`research_ideation_model` defaults to `gpt-6-sol` at high effort with a 12,000-token
 output cap. Ideas are provisional proposals, not proofs or scientific graph writes.
+
+An active open obligation can also trigger `repeated_obligation_failure` after
+two completed substantive develop/synthesis attempts on that obligation without
+resolution. Accepted-artifact receipts establish attempts; failed calls and
+duplicate-only output do not count. Persisted resolution, bypass and reopening
+events reset the count, including reopening recorded outside an iteration.
+Attempts or resolutions on other obligations do not affect this count. The same
+three-completed-iteration cooldown and planning-call limits apply.
+
+Obligation ideation uses its live owning route, relevant artifacts and obstruction
+evidence, and the full supplied problem contract. It proposes 3–5 local approaches,
+preferring simpler/weaker sufficient mechanisms and avoiding repetition of recorded
+failed approaches. Each idea is a `develop` move targeting and focusing that
+obligation. The strategist compares it with the existing ordinary moves; selected
+ideas use the strong idea-development model and preserve route ancestry.
+Unselected ideas remain telemetry. Top-level ideation and strategy/provider
+ablations retain their existing behavior. No semantic mechanism classifier or
+additional scientific operation is introduced.
 
 The strict batch has 3–5 distinct mechanisms, explicit supplied graph references,
 route changes and main risks. The strategist may select an idea or any ordinary
@@ -689,7 +707,18 @@ Success, call-limit completion, or invocation-budget exhaustion sets lifecycle `
 Global branch exhaustion uses persisted construction-route roots and structural
 liveness. A standalone blocked obstruction, counterexample, or failed approach
 does not establish exhaustion when no substantive route has yet existed.
-Negative evidence remains auditable and may still refute its owned route.
+Negative evidence remains auditable. `related_entity_ids` records scientific
+relevance and never closes a referenced route, ancestor, contract, or obligation.
+Closure uses active directed `REFUTES`, `BLOCKS`, or `CONTRADICTS` edges targeting
+the affected object, or `FAILS_AT` edges from that object to the failure evidence.
+A failed child mechanism leaves its parent route and open obligation live unless
+explicit closure or supersession provenance also applies to them.
+
+Research negative artifacts may supply optional `refutes_entity_ids` (default
+`[]`), a subset of their in-context `related_entity_ids`. These become quarantined
+`REFUTES` edges through the write gate. Critical bounded attacks also record
+refutation scope on the tested candidate. Existing unscoped relevance references
+are not retroactively interpreted using model prose.
 Terminal obstruction records also qualify for the existing concrete-refutation
 ideation trigger; model uncertainty text never determines route liveness.
 

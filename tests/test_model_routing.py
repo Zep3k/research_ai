@@ -61,10 +61,9 @@ def test_exact_routes_are_pure_and_deterministic(
     monkeypatch.setattr("theory.research.connect", forbidden)
     choice = OperationChoice(operation, 1, "test", focus_obligation_id=focus)
     cfg = Config()
-    expected = ModelRoute(provider, model, effort, 12_000, rationale)
+    expected = ModelRoute(provider, model, effort, RESEARCH_MAX_OUTPUT_TOKENS, rationale)
     assert choose_model_route(choice, cfg) == expected
     assert choose_model_route(choice, cfg) == expected
-    assert RESEARCH_MAX_OUTPUT_TOKENS == 12_000
 
 
 def test_selected_idea_develop_uses_its_own_configured_role():
@@ -73,13 +72,13 @@ def test_selected_idea_develop_uses_its_own_configured_role():
     ordinary = OperationChoice("develop", 1, "Continue ordinary development")
     selected_idea = OperationChoice("develop", 1, "Explore selected idea", idea=transient_idea())
     assert choose_model_route(ordinary, cfg) == ModelRoute(
-        "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+        "openai", "gpt-6-luna", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:develop"
     )
     assert choose_model_route(selected_idea, cfg) == ModelRoute(
-        "anthropic", "claude-sonnet-5", "high", 12_000, "auto:idea_develop"
+        "anthropic", "claude-sonnet-5", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:idea_develop"
     )
     assert choose_model_route(selected_idea, Config()) == ModelRoute(
-        "openai", "gpt-6-sol", "high", 12_000, "auto:idea_develop"
+        "openai", "gpt-6-sol", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:idea_develop"
     )
     assert selected_idea.develop_provenance == "idea"
 
@@ -108,17 +107,17 @@ def test_develop_provenance_routes_without_replaying_idea():
     )
     assert idea_continuation.idea is None
     assert choose_model_route(idea_continuation, cfg) == ModelRoute(
-        "anthropic", "claude-sonnet-5", "high", 12_000, "auto:idea_develop"
+        "anthropic", "claude-sonnet-5", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:idea_develop"
     )
     for choice in (frontier_escape, frontier_continuation):
         assert choose_model_route(choice, cfg) == ModelRoute(
-            "openai", "gpt-6-sol", "high", 12_000, "auto:frontier_develop"
+            "openai", "gpt-6-sol", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:frontier_develop"
         )
     assert choose_model_route(ordinary_continuation, cfg) == ModelRoute(
-        "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+        "openai", "gpt-6-luna", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:develop"
     )
     assert choose_model_route(obligation_develop, cfg) == ModelRoute(
-        "openai", "gpt-6-luna", "high", 12_000, "auto:develop"
+        "openai", "gpt-6-luna", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:develop"
     )
 
 
@@ -154,7 +153,7 @@ def test_forced_provider_uses_single_configured_model_for_every_operation(overri
         route = choose_model_route(
             choice, cfg, provider_override=override,
         )
-        assert route == ModelRoute(override, model, "high", 12_000, f"forced:{override}")
+        assert route == ModelRoute(override, model, "high", RESEARCH_MAX_OUTPUT_TOKENS, f"forced:{override}")
 
 
 def test_role_provider_ownership_comes_from_model_specs():
@@ -276,14 +275,14 @@ def test_selected_route_reaches_budget_provider_and_receipts(
     assert outcome.calls_made == len(provider.calls) == 1
     assert initialized == [provider_name]
     request = provider.calls[0]
-    assert (request["model"], request["effort"], request["max_output_tokens"]) == (model, effort, 12_000)
+    assert (request["model"], request["effort"], request["max_output_tokens"]) == (model, effort, RESEARCH_MAX_OUTPUT_TOKENS)
     expected_response = (
         "FlatAttackReport" if operation == "attack" and provider_name == "anthropic"
         else "ResearchAttackResponse" if operation == "attack" else "ResearchStepReport"
     )
     assert request["response_model"].__name__ == expected_response
     assert admissions[0][0]["model"] == model
-    assert admissions[0][0]["max_output_tokens"] == 12_000
+    assert admissions[0][0]["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS
     with connect() as con:
         receipt = con.execute("SELECT * FROM api_calls").fetchone()
         assert con.execute("SELECT COUNT(*) FROM research_iterations").fetchone()[0] == 1
@@ -430,7 +429,7 @@ def test_explicit_legacy_attack_model_remains_readable_without_rewrite(monkeypat
     cfg = Config.load()
     assert cfg.research_attack_model == "claude-sonnet-5"
     assert choose_model_route(OperationChoice("attack", 1, "test"), cfg) == ModelRoute(
-        "anthropic", "claude-sonnet-5", "high", 12_000, "auto:attack"
+        "anthropic", "claude-sonnet-5", "high", RESEARCH_MAX_OUTPUT_TOKENS, "auto:attack"
     )
     assert path.read_text() == configured
 

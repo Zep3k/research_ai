@@ -1,63 +1,63 @@
 {
   "develop": {
-    "words": "a0a66a0cddafefe0fad0b663a8cbe747dcbda368af1dbfd277af082c0d53c80b",
+    "words": "06dad76dccfafc10a0c4cba51c4ea16677360dfcafa127109ce4a1436db7718d",
     "decision_and_graph": "bb9bc6816341302363c70ea5de708cf4de7af732e44f897f8f4a0e67e4900725",
-    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+    "example": "327439780a60fae3037aa12d3bb2fe229c7e89ad0a3156ad7d01178dba248b72"
   },
   "focused_develop": {
-    "words": "eec5e22051709c80b66c69d385a7deb12a3a4292ca642693112173a991d50b44",
+    "words": "b9107d7c715111eb7257a43c5c889c5851cc9773aa2ebd75b46934e876cd4de7",
     "decision_and_graph": "8e2e78528c0a5d5fb1c4f9b89773fce25a1f4e55ec3630b0293abf7eda841c1a",
-    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+    "example": "327439780a60fae3037aa12d3bb2fe229c7e89ad0a3156ad7d01178dba248b72"
   },
   "escape_develop": {
-    "words": "40641910ce277118b67f7c7d76d0b4cda4d407b228fd61233fc9697d655d709e",
+    "words": "ad56dc36192f7d97bb0900e133e280a1c88bfd415ac0b5d3d3cadd0aee593e9e",
     "decision_and_graph": "9700e9ddd24f4e8a4329582292d59b6d25bcd82f2c19f629c4adcabc7e49a509",
-    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+    "example": "327439780a60fae3037aa12d3bb2fe229c7e89ad0a3156ad7d01178dba248b72"
   },
   "contract_develop": {
-    "words": "a1e72cd1cb0f1fd8b376a0feaa832999836d4215bd09d585d3fd6d9f02775362",
+    "words": "90f209ae55da93a7cb56c29b715b0ab5aa2ad241c2d8c03432641cf87768e7fa",
     "decision_and_graph": "bb9bc6816341302363c70ea5de708cf4de7af732e44f897f8f4a0e67e4900725",
-    "example": "aa1d4eb2dc7c37f7152173c1b562362ecf863e757841a47553525acdc9d711f6"
+    "example": "327439780a60fae3037aa12d3bb2fe229c7e89ad0a3156ad7d01178dba248b72"
   },
   "prove": {
-    "words": "8ac9efc8dd5cc7c06a70e752bab937ccf3d6cb7ba4378329732e22329e3c9943",
+    "words": "96ab357ed503dc5f869052a9dc4aa3994f26af0573e9e8f3d9036860dc4f5a63",
     "decision_and_graph": "3f544f0e87d5fbd676e8755a0aa5a8c336fa81bc390c96d62a747432fb570cbb",
-    "example": "2bb90aed34f1e17d65734fad11efd52894d8fd714b7fa1ad067500e9601a8178"
+    "example": "a7bf95e136da0e4733e25a29ed2478fe0f38c6d164d67a600f644ade8dad961b"
   },
   "open_prove": {
-    "words": "b0cf7d49c63af66a1dc232fe56df96cd0fe5fb288e03aac0c471fda07be95995",
+    "words": "253cdb3aeba29485e5cefe3e76479459bc8fc99f353431563a97f0273d034af6",
     "decision_and_graph": "f2e5ff2345414b674b51be1b47ce33d778cd2fdf7fd71ab0cfb94d325918ebfe",
-    "example": "2bb90aed34f1e17d65734fad11efd52894d8fd714b7fa1ad067500e9601a8178"
+    "example": "a7bf95e136da0e4733e25a29ed2478fe0f38c6d164d67a600f644ade8dad961b"
   },
   "focused_prove": {
-    "words": "5c0097f7bd7db815180b314678d7730c24f839dff99a229daeefe60a2e67aa3f",
+    "words": "ddb0baf397b75de390c298afa1b3d08ba5f98060a6d18b5a9bd108ad03f35508",
     "decision_and_graph": "6567fa153305fb37d0d074f56d5541c9ae22d8d8b3220cb72ff251339f03f93f",
-    "example": "45e55898a10db67704fcc51a063c731b558d1b1c4c23a66fb376505453ea66b8"
+    "example": "529be775569257eb6b9b93c75cc9bb4601c2cc43ff8280552b907040909d89bb"
   },
   "attack": {
-    "words": "ffcb7a18b3a7c5878982e10d1e0d0fd8ef266ec6331ea5ced8c4c1ef4cb85388",
+    "words": "04ae77b4a19daf515dfde95e35082f0f3f940657cda2b8f9366aa5d10b4dd306",
     "decision_and_graph": "486c9d673c3e8063fb186f3457a541b4e12fcf1e665fa40ee4d2f6d4d1185875",
     "example": "c0a9d54e2934bb24d7daa388ee235bf5eef1d00e3150061fda20122d10cc791c"
   },
   "reframe_attack": {
-    "words": "0210d9efa984305bf638ce88e0836332419d61ca3263167e06f0bbbbd9bfbcf4",
+    "words": "b24c87e0df1c75f7e0cbfac178ba5c23c680780b2faa877ac46faea67fd74851",
     "decision_and_graph": "b513e1c92179a3000aa19367866744da82b541c8f166c03f83bb634969498922",
     "example": "c0a9d54e2934bb24d7daa388ee235bf5eef1d00e3150061fda20122d10cc791c"
   },
   "synthesize": {
-    "words": "0120941083fbceefc038f8ea0bfe18a967b40c23211d9451d464fb3cefc2c108",
+    "words": "aca7fa41d275c0a5a80fe154f9534573a890dc72be6b81d9eeb389e869388681",
     "decision_and_graph": "8f417e8eaec82eeb75e7636c68034af4ea4185cf1b24913dc0822d671ecab8f2",
-    "example": "17812f34115d09e111ab7e7bfcfb937a0649c8d64053c6019758f06f875fd2e1"
+    "example": "c2221e61ccb681fa37eefaa84b67bffcd77e93c43aff8b0f1960ad8d25e075fd"
   },
   "primary_synthesize": {
-    "words": "72b4b706bc58642030b81569af901bb266dfb1a0636f653a1b68cb94d34bcb9f",
+    "words": "b765f66e2585807adf4d3fc4317821186a9a6b193194a9e410de7fca9acacd57",
     "decision_and_graph": "8f417e8eaec82eeb75e7636c68034af4ea4185cf1b24913dc0822d671ecab8f2",
-    "example": "17812f34115d09e111ab7e7bfcfb937a0649c8d64053c6019758f06f875fd2e1"
+    "example": "c2221e61ccb681fa37eefaa84b67bffcd77e93c43aff8b0f1960ad8d25e075fd"
   },
   "reframe": {
-    "words": "55502fc84d33d84e66cf4c04d69d34ac8b428f7223162214b62f8c0724f150ad",
+    "words": "2a5b8bb545cb5302385dfb3b4939c15e96ca4f904c29cf0a28315c6330661327",
     "decision_and_graph": "802dd25f6421a7a9f1aa38c682fb5ad0e12cc5fc1a20511c7af2fb1600c4a992",
-    "example": "2bf23186778f198ab1159c79fee3ff9eaa2dde225f285394fc14f545affdfc6f"
+    "example": "002e5a8cccaf9034876b8679c2d4a95faffffe81107b7b1f959fab49a80d4d64"
   },
   "strategist": {
     "words": "c251382590c5fb1b92bdf2c8a5e521793a7151abc6a64738154434af857dcc01"

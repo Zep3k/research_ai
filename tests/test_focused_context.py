@@ -156,6 +156,11 @@ def test_context_size_and_prompt_exclude_unrelated_branch(branches):
 
 def test_research_rejects_reference_to_omitted_entity_at_execution_boundary(branches, monkeypatch):
     workstream, ids, _, _, _ = branches
+    with connect() as con:
+        # A controller attack must target a live candidate, not the already
+        # explicitly blocked candidate used by the pure focusing tests.
+        con.execute("UPDATE relations SET status='retired' WHERE relation_type='BLOCKS' AND target_entity_id=?",
+                    (ids["proof_a"],))
     def respond(decision, _):
         assert decision["operation"] == "attack"
         report = step_report(decision, [artifact(
@@ -192,6 +197,10 @@ def test_duplicate_detection_uses_omitted_full_context_branch(monkeypatch, tmp_p
 
 def test_attack_closure_receives_full_context_and_other_obligations_stay_open(branches, monkeypatch):
     workstream, ids, _, full, _ = branches
+    with connect() as con:
+        con.execute("UPDATE relations SET status='retired' WHERE relation_type='BLOCKS' AND target_entity_id=?",
+                    (ids["proof_a"],))
+        set_attribute(con, ids["proof_a"], "addresses_obligation_ids", "[]")
     import importlib
     controller = importlib.import_module("theory.research")
     original = controller._candidate_can_complete_obligation_after_attack
@@ -202,6 +211,7 @@ def test_attack_closure_receives_full_context_and_other_obligations_stay_open(br
         return original(context, candidate_id, obligation_id)
     monkeypatch.setattr(controller, "_candidate_can_complete_obligation_after_attack", check)
     def respond(decision, _):
+        assert decision["operation"] == "attack"
         report = step_report(decision, [], attack_outcome="no_critical_issue")
         report.pop("attack_outcome")
         return report
@@ -210,7 +220,7 @@ def test_attack_closure_receives_full_context_and_other_obligations_stay_open(br
     outcome = research(workstream, max_calls=1, strategy="off")
     assert checked == [ids["proof_a"]]
     assert "UNRELATED_BRANCH_SENTINEL" not in provider.calls[0]["prompt"]
-    # A has an unresolved blocker; its candidate must not close it. B also stays open.
+    # A's incomplete candidate must not close it. B also stays open.
     assert outcome.stop_reason == "max_calls_exhausted"
     after = for_workstream(workstream)
     assert ids["a"] in controller._open_obligation_ids(after, workstream, ids["primary"])

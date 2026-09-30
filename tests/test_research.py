@@ -2480,7 +2480,7 @@ def test_incomplete_openai_response_is_not_parsed_and_retains_usage(
         research(workstream, "openai", max_calls=1)
 
     assert len(provider.calls) == 1
-    assert provider.calls[0]["max_output_tokens"] == 12_000
+    assert provider.calls[0]["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS
     assert provider.calls[0]["response_model"] is ResearchStepReport
     with connect() as con:
         call = con.execute("SELECT * FROM api_calls").fetchone()

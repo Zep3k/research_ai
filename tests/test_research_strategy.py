@@ -18,6 +18,7 @@ from theory.models import ModelResult
 from theory.prompts import render_prompt
 from theory.research_report import build_research_report
 from theory.research import (
+    RESEARCH_MAX_OUTPUT_TOKENS,
     LegalResearchMove, OperationChoice, ResearchStepReport, StrategistDecision,
     STRATEGIST_MAX_OUTPUT_TOKENS, _history, _strategist_prompt, build_research_state,
     choose_next_operation, generate_legal_research_moves, research,
@@ -144,7 +145,7 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     assert constructed == ["openai", "anthropic"]
     assert [(name, request["model"], request["effort"], request["max_output_tokens"]) for name, request in requests] == [
         ("openai", "gpt-6-luna", "medium", 4000),
-        ("anthropic", "claude-opus-5-5", "medium", 12000),
+        ("anthropic", "claude-opus-5-5", "medium", RESEARCH_MAX_OUTPUT_TOKENS),
     ]
     assert STRATEGIST_MAX_OUTPUT_TOKENS == 4000
     execution = decision_from_prompt(requests[1][1]["prompt"])
@@ -373,7 +374,7 @@ def test_no_obligations_strategist_can_develop_past_auxiliary_candidate(
     assert len(outcome.artifact_ids) == 1
     assert "Compare proving/attacking it against" in requests[0][1]["prompt"]
     execution = requests[1][1]
-    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-sol", "high", 12_000)
+    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-sol", "high", RESEARCH_MAX_OUTPUT_TOKENS)
     assert decision_from_prompt(execution["prompt"])["target_entity_id"] == primary_id
     assert "Do not assume the current open obligations are necessary." not in execution["prompt"]
     after = for_workstream(workstream)
@@ -411,15 +412,17 @@ def test_no_obligations_ablations_keep_local_candidate(
     assert json.loads(row["legal_move_ids_json"]) == [LegalResearchMove.from_choice(baseline).move_id]
 
 
-def test_terminal_baseline_disagreement_fails_closed_without_changing_scheduler(monkeypatch, tmp_path):
+def test_terminal_candidate_is_absent_from_deterministic_baseline(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, primary = make_research_workstream()
     candidate = add_linked_research_entity(workstream, "ProofAttempt", "Terminal attempt", branch_status="refuted")
     context = for_workstream(workstream)
     primary_entity = next(entity for entity in context.entities if entity["id"] == primary)
-    assert choose_next_operation(context, workstream, primary_entity, ()).target_entity_id == candidate
-    with pytest.raises(TheoryError, match="baseline is not a legal move"):
-        generate_legal_research_moves(context, workstream, primary_entity, ())
+    baseline = choose_next_operation(context, workstream, primary_entity, ())
+    assert baseline.target_entity_id == primary
+    moves = generate_legal_research_moves(context, workstream, primary_entity, ())
+    assert LegalResearchMove.from_choice(baseline) in moves
+    assert all(move.target_entity_id != candidate for move in moves)
 
 
 def test_research_state_is_compact_pure_deterministic_and_records_only_persisted_states(historical, monkeypatch):
@@ -776,7 +779,7 @@ def test_frontier_develop_and_consecutive_continuations_keep_route_after_resume(
     executions = [kwargs for _, kwargs in requests
                   if kwargs["response_model"] is ResearchStepReport]
     assert [request["model"] for request in executions] == ["gpt-6-sol"] * 3
-    assert all(request["max_output_tokens"] == 12_000 for request in executions)
+    assert all(request["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS for request in executions)
     assert all("research_develop_provenance" not in request["prompt"] for request in executions)
     with connect() as con:
         rows = [dict(row) for row in con.execute(

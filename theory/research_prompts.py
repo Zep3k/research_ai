@@ -157,6 +157,13 @@ EPISTEMIC AND WRITE RULES
 - Keep each reasoning_summary concise and technical rather than essay-length.
 - Do not restate an existing entity or existing material_key. Rephrasing is not progress.
 - Every artifact must reference the selected target in related_entity_ids.
+- related_entity_ids records relevance, not refutation scope. For a negative artifact,
+  refutes_entity_ids names only the existing entities whose mechanism or requirement
+  this artifact explicitly refutes; otherwise return []. Include those IDs in
+  related_entity_ids too. Failure of one implementation of an obligation does not
+  refute the obligation or its parent construction. Do not list ancestors merely
+  because they provide context. Refuting an obligation itself requires establishing
+  impossibility of that requirement, not failure of one attempted mechanism.
 - Do not set human_judgment_required because the selected candidate needs an unstated
   assumption. Record that candidate as conditional/blocked/failed and continue research,
   using an appropriate failed_approach, obstruction, open_question/proof_obligation, or
@@ -410,6 +417,7 @@ Apply these rules in order; attack_outcome MUST NOT be "not_applicable":
       "material_key": "stable_lowercase_concept_key",
       "epistemic_status": "inference|speculation|unresolved",
       "related_entity_ids": {json.dumps(required_artifact_related_entity_ids)},
+      "refutes_entity_ids": [],
       "source_ids": [],
       "branch_status": null
     }}

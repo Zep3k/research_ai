@@ -10,8 +10,9 @@ from theory.cli import app
 from theory.config import Config
 from theory.db import SCHEMA_VERSION, RESEARCH_NECESSITY_COLUMNS, SCHEMA, connect, utcnow
 from theory.errors import ModelOutputError
-from theory.graph import add_entity, link_workstream_entity, set_attribute
+from theory.graph import add_relation, add_entity, link_workstream_entity, set_attribute
 from theory.research import (
+    RESEARCH_MAX_OUTPUT_TOKENS,
     LegalResearchMove, OperationChoice, ProblemContractBrief, ResearchStepReport,
     StrategistDecision, _active_obligation_history, _open_obligation_ids,
     _persisted_open_obligation_ids,
@@ -108,7 +109,7 @@ def test_wa_primary_develop_escape_preserves_old_route(wa, monkeypatch):
     assert len(outcome.artifact_ids) == 2
     assert instruction in requests[1][1]["prompt"]
     assert CONTRACT in requests[1][1]["prompt"]
-    assert requests[1][1]["max_output_tokens"] == 12_000
+    assert requests[1][1]["max_output_tokens"] == RESEARCH_MAX_OUTPUT_TOKENS
     context, primary, history, moves, _ = planning(wa)
     for oid in (obligation, broadcast):
         assert context.attributes[oid] == before[oid]
@@ -454,7 +455,9 @@ def test_preexisting_critical_issue_blocks_bypass_despite_no_issue_response(wa, 
         if choice.operation == "reframe":
             context = for_workstream(workstream)
             candidate = int(context.attributes[obligation]["research_reframe_candidate_id"])
-            add_linked_research_entity(workstream, "Obstruction", "Previously found circular alternative route", related_entity_ids=(candidate,))
+            obstruction = add_linked_research_entity(workstream, "Obstruction", "Previously found circular alternative route", related_entity_ids=(candidate,))
+            with connect() as con:
+                add_relation(con, obstruction, "BLOCKS", candidate)
     monkeypatch.setattr(controller, "_complete_iteration", add_issue)
     install_providers(monkeypatch, execute=inspect, select=select_audit_or_attack)
     research(workstream, max_calls=2)
@@ -915,8 +918,10 @@ def test_route_failure_during_execution_records_reactivation_progress(wa, monkey
         move = next(m for m in state["legal_moves"] if m["operation"] == "develop" and m["target_entity_id"] == replacements[0])
         return {"selected_move_id": move["move_id"], "rationale": "Check conflict visibility."}
     def execute(decision, _):
-        return step_report(decision, [artifact("failed_approach", "This visibility route is refuted by an admissible delayed-evidence schedule.",
-                                               "visibility_route_refuted", [replacements[0]], branch_status="refuted")])
+        failure = artifact("failed_approach", "This visibility route is refuted by an admissible delayed-evidence schedule.",
+                           "visibility_route_refuted", [replacements[0]], branch_status="refuted")
+        failure["refutes_entity_ids"] = [replacements[0]]
+        return step_report(decision, [failure])
     requests, _ = install_providers(monkeypatch, execute=execute, select=select)
     result = research(wa[0], provider_name="auto", max_calls=1)
     assert len(requests) == result.total_api_calls_made == 2

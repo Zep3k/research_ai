@@ -178,23 +178,25 @@ def live_construction_route_ids(context: ResearchContext) -> frozenset[int]:
     )
 
 
+def entity_has_closing_relation(context: ResearchContext, entity_id: int) -> bool:
+    """Only directed active edges establish refutation scope, never relevance."""
+    return any(
+        r["status"] == "active" and (
+            (r["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"}
+             and int(r["target_entity_id"]) == entity_id)
+            or (r["relation_type"] == "FAILS_AT" and int(r["source_entity_id"]) == entity_id)
+        )
+        for r in context.relations
+    )
+
+
 def route_entity_is_live(context: ResearchContext, entity_id: int) -> bool:
     entity = next((e for e in context.entities if int(e["id"]) == entity_id), None)
     return bool(
         entity and entity["status"] == "active" and entity["trust_state"] != "contradicted"
         and not _has_terminal_branch_state(context, entity_id)
+        and not persisted_id_set(_attribute(context, entity_id, SUPERSEDED_BY))
         and _attribute(context, entity_id, "research_obligation_state") != "blocked"
         and _attribute(context, entity_id, "research_attack_state") != "challenged"
-        and not any(
-            e["entity_type"] in {"Counterexample", "Obstruction", "FailedApproach"}
-            and e["status"] == "active" and e["trust_state"] != "contradicted"
-            and _has_terminal_branch_state(context, int(e["id"]))
-            and entity_id in persisted_id_set(_attribute(context, int(e["id"]), "related_entity_ids"))
-            for e in context.entities
-        )
-        and not any(
-            (r["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"} and int(r["target_entity_id"]) == entity_id)
-            or (r["relation_type"] == "FAILS_AT" and int(r["source_entity_id"]) == entity_id)
-            for r in context.relations
-        )
+        and not entity_has_closing_relation(context, entity_id)
     )

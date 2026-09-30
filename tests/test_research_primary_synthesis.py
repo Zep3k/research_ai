@@ -8,6 +8,7 @@ from theory.db import connect
 from theory.errors import ModelOutputError
 from theory.graph import add_entity, link_workstream_entity, set_attribute
 from theory.research import (
+    RESEARCH_MAX_OUTPUT_TOKENS,
     LegalResearchMove, ResearchStepReport, _open_obligation_ids, _research_prompt,
     _validate_step_report, build_research_state, choose_next_operation,
     generate_legal_research_moves, research,
@@ -108,7 +109,7 @@ def test_primary_synthesis_persists_joint_branch_without_mutating_inputs(branche
     assert (outcome.calls_made, outcome.strategy_calls_made, outcome.total_api_calls_made) == (1, 1, 2)
     assert outcome.stop_reason == "max_calls_exhausted"
     execution = requests[1][1]
-    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-sol", "high", 12_000)
+    assert (execution["model"], execution["effort"], execution["max_output_tokens"]) == ("gpt-6-sol", "high", RESEARCH_MAX_OUTPUT_TOKENS)
     assert CONTRACT in execution["prompt"]
     assert "Synthesize the selected artifacts against the exact problem contract." in execution["prompt"]
     assert "Do not assume quarantined artifacts are true" in execution["prompt"]
