@@ -17,7 +17,7 @@ from unittest.mock import patch
 import theory.research as controller
 from theory.config import Config
 from theory.db import connect, initialize
-from theory.graph import add_entity, create_workstream, link_workstream_entity, set_attribute
+from theory.graph import add_entity, add_relation, create_workstream, link_workstream_entity, set_attribute
 from theory.models import ModelResult
 from theory.prompts import render_prompt
 from theory.research_context import for_workstream
@@ -165,6 +165,16 @@ def run_case(case: Case, *, fault: str | None = None) -> dict:
             context = for_workstream(ws)
             accepted = json.loads(row["artifact_ids_json"])
             accepted_keys = [context.attributes[i]["research_material_key"] for i in accepted]
+            # Fixture DSL dependencies between co-produced objects cannot name
+            # graph IDs until the receipt is persisted. Reconstruct those exact
+            # edges before the next execution; contract links are not dependencies.
+            siblings = dict(zip(accepted_keys, accepted))
+            with connect() as con:
+                for entity_id in accepted:
+                    declared = json.loads(context.attributes[entity_id]["research_statement"])["dependencies"]
+                    for key in declared:
+                        if key in siblings and siblings[key] != entity_id:
+                            add_relation(con, entity_id, "DEPENDS_ON", siblings[key], trust_state="quarantined")
             remaining = Counter(accepted_keys)
             duplicate_keys = []
             for item in report.artifacts:

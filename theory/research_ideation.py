@@ -102,6 +102,7 @@ def choose_ideation_trigger(
         and e["trust_state"] != "contradicted"
         and (e["entity_type"] == "Counterexample"
              or context.attributes.get(int(e["id"]), {}).get("research_attack_state") == "challenged"
+             or (e["entity_type"] == "Obstruction" and context.attributes.get(int(e["id"]), {}).get("research_branch_status") in {"blocked", "failed", "refuted"})
              or (e["entity_type"] == "FailedApproach" and context.attributes.get(int(e["id"]), {}).get("research_branch_status") in {"failed", "refuted"}))))
     options = []
     if negative:

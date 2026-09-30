@@ -38,7 +38,11 @@ from .research_ideation import (
 from .research_progress import (
     ProgressEvent, ProgressEventKind, ProgressLevel, ProgressRecord, progress_event_kinds,
 )
-from .research_routes import ROUTE_IDS, STARTED_AT, SUPERSEDED_BY, record_construction_routes
+from .research_routes import (
+    CONSTRUCTION_TYPES, ROUTE_IDS, STARTED_AT, record_construction_routes,
+    live_construction_route_ids, persisted_id_set as _stored_id_set,
+    route_entity_is_live as _route_entity_is_live,
+)
 
 
 STRATEGIST_MAX_OUTPUT_TOKENS = 4000
@@ -750,21 +754,6 @@ def _completed_no_issue_attack(
     )
 
 
-def _stored_id_set(raw: object) -> frozenset[int]:
-    if not isinstance(raw, str):
-        return frozenset()
-    try:
-        values = json.loads(raw)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return frozenset()
-    if not isinstance(values, list):
-        return frozenset()
-    try:
-        return frozenset(int(value) for value in values)
-    except (TypeError, ValueError):
-        return frozenset()
-
-
 def _completed_synthesis_input_sets(
     history: tuple[dict, ...], target_entity_id: int
 ) -> set[frozenset[int]]:
@@ -923,19 +912,6 @@ def _obligation_route_activity(
             parents)
 
 
-def live_construction_route_ids(context: ResearchContext) -> frozenset[int]:
-    """Persisted route roots survive until challenged, terminal or superseded.
-
-    An unfinished component or testable/surviving root remains live across
-    controller calls. Scheduling order and strategist rankings play no role.
-    """
-    return frozenset(
-        entity_id for entity_id, attrs in context.attributes.items()
-        if STARTED_AT in attrs and not _stored_id_set(attrs.get(SUPERSEDED_BY))
-        and _route_entity_is_live(context, entity_id)
-    )
-
-
 def _construction_entity_is_active(context: ResearchContext, entity_id: int) -> bool:
     roots = _stored_id_set(_attribute(context, entity_id, ROUTE_IDS))
     return not roots or bool(roots & live_construction_route_ids(context))
@@ -1042,21 +1018,44 @@ def _all_obligations_have_completed_candidates(
     return True
 
 
-def _branch_states(
-    context: ResearchContext, workstream_id: int
-) -> tuple[str, ...]:
-    states: list[str] = []
-    for entity_id in _linked_ids(context, workstream_id):
-        attrs = context.attributes.get(entity_id, {})
-        state = attrs.get("research_branch_status") or attrs.get("develop_branch_status")
-        if state in LIVE_BRANCH_STATES | TERMINAL_BRANCH_STATES:
-            states.append(state)
-    return tuple(states)
-
-
 def _all_branches_terminal(context: ResearchContext, workstream_id: int) -> bool:
-    states = _branch_states(context, workstream_id)
-    return bool(states) and not any(state in LIVE_BRANCH_STATES for state in states)
+    """Exhaust established construction routes, never standalone negative evidence.
+
+    An obligation-only root becomes substantive when construction is persisted
+    on it. Terminal artifacts remain evidence; only existing structural route
+    liveness and active work determine whether the whole frontier is exhausted.
+    """
+    linked = _linked_ids(context, workstream_id)
+    roots = {i for i in linked if STARTED_AT in context.attributes.get(i, {})}
+    substantive = {i for i in roots
+                   if _attribute(context, i, "research_artifact_type") in CONSTRUCTION_TYPES}
+    for entity_id in linked:
+        if _attribute(context, entity_id, "research_artifact_type") in CONSTRUCTION_TYPES:
+            substantive.update(_stored_id_set(_attribute(context, entity_id, ROUTE_IDS)) & roots)
+    if not substantive or roots & live_construction_route_ids(context):
+        return False
+    primary_id = int(_primary_target(context, workstream_id)["id"])
+    if _open_obligation_ids(context, workstream_id, primary_id):
+        return False
+
+    inputs = _input_ids(context, workstream_id)
+    for entity in context.entities:
+        entity_id = int(entity["id"])
+        if entity_id not in linked - inputs or not _route_entity_is_live(context, entity_id):
+            continue
+        attrs = context.attributes.get(entity_id, {})
+        if (_construction_entity_is_active(context, entity_id)
+                and (_is_precise_candidate(context, entity)
+                     or attrs.get("research_artifact_type") in CONSTRUCTION_TYPES)):
+            return False
+        parent = _explicit_obligation_id(attrs.get("research_reframe_target_obligation_id"), linked)
+        if parent is not None and (
+            (_attribute(context, parent, "research_obligation_state") == "reframe_pending_attack"
+             and _attribute(context, parent, "research_reframe_candidate_id") == str(entity_id))
+            or bypass_route_is_live(context, parent, entity_id)
+        ):
+            return False
+    return True
 
 
 def _entity_is_relevant_to_obligation(
@@ -1797,28 +1796,6 @@ def _is_reframe_attack(context: ResearchContext, choice: OperationChoice) -> boo
         and _attribute(context, focus, "research_obligation_state") == "reframe_pending_attack"
         and _attribute(context, focus, "research_reframe_candidate_id") == str(choice.target_entity_id)
         and _attribute(context, choice.target_entity_id, "research_reframe_target_obligation_id") == str(focus)
-    )
-
-
-def _route_entity_is_live(context: ResearchContext, entity_id: int) -> bool:
-    entity = next((e for e in context.entities if int(e["id"]) == entity_id), None)
-    return bool(
-        entity and entity["status"] == "active" and entity["trust_state"] != "contradicted"
-        and not _has_terminal_branch_state(context, entity_id)
-        and _attribute(context, entity_id, "research_obligation_state") != "blocked"
-        and _attribute(context, entity_id, "research_attack_state") != "challenged"
-        and not any(
-            e["entity_type"] in {"Counterexample", "Obstruction", "FailedApproach"}
-            and e["status"] == "active" and e["trust_state"] != "contradicted"
-            and _has_terminal_branch_state(context, int(e["id"]))
-            and entity_id in _stored_id_set(_attribute(context, int(e["id"]), "related_entity_ids"))
-            for e in context.entities
-        )
-        and not any(
-            (r["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"} and int(r["target_entity_id"]) == entity_id)
-            or (r["relation_type"] == "FAILS_AT" and int(r["source_entity_id"]) == entity_id)
-            for r in context.relations
-        )
     )
 
 
@@ -3044,13 +3021,13 @@ def _run_research(
         history = _scientific_history(_history(workstream_id))
         if _all_branches_terminal(
             full_context, workstream_id
-        ) and not _open_obligation_ids(full_context, workstream_id, int(primary["id"])):
+        ):
             _finalize(
                 workstream_id=workstream_id,
                 iteration_id=last_iteration_id,
                 status="blocked",
                 stop_reason="all_branches_blocked_or_refuted",
-                detail="No promising or unresolved branch remains in the linked graph state.",
+                detail="Every established construction route is inactive; no active obligation, candidate, or bypass work remains.",
             )
             return ResearchOutcome(
                 workstream_id,
@@ -3183,6 +3160,9 @@ def _run_research(
             focus_obligation_id=choice.focus_obligation_id,
             consumed_entity_ids=choice.consumed_entity_ids,
             additional_entity_ids=tuple(use.entity_id for use in choice.idea.exploits) if choice.idea else (),
+            operation=choice.operation,
+            continuation_route_ids=tuple(sorted(_constructive_continuation_streak(full_context, history)[0]))
+            if choice.continue_construction else (),
         )
         response_model = _execution_response_model(choice.operation, route.provider)
         prompt = _research_prompt_sections(
@@ -3236,6 +3216,7 @@ def _run_research(
                     _parse_execution_report(text, response_model), model_context, choice,
                 )) if choice.operation == "attack" else None,
                 invocation_budget=invocation_budget,
+                context_scope=model_context.context_scope,
             )
             calls_made += 1
             report = _parse_execution_report(result.text, response_model)
@@ -3321,15 +3302,13 @@ def _run_research(
             )
         if _all_branches_terminal(
             full_context_after, workstream_id
-        ) and not _open_obligation_ids(
-            full_context_after, workstream_id, int(primary["id"])
         ):
             _finalize(
                 workstream_id=workstream_id,
                 iteration_id=iteration_id,
                 status="blocked",
                 stop_reason="all_branches_blocked_or_refuted",
-                detail="No promising or unresolved branch remains after this iteration.",
+                detail="Every established construction route is inactive; no active obligation, candidate, or bypass work remains after this iteration.",
             )
             return ResearchOutcome(
                 workstream_id,

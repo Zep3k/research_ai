@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from .db import connect
 from .errors import TheoryError
+from .research_routes import ROUTE_IDS, live_construction_route_ids, persisted_id_set, route_entity_is_live
 from .trust import TrustState, require_entity, source_has_identifiable_origin
 
 
@@ -108,29 +109,55 @@ def focus_research_context(
     focus_obligation_id: int | None = None,
     consumed_entity_ids: tuple[int, ...] = (),
     additional_entity_ids: tuple[int, ...] = (),
+    operation: str | None = None,
+    continuation_route_ids: tuple[int, ...] = (),
 ) -> ResearchContext:
-    """Pure local view plus recorded dependency ancestry; omission is not a judgment."""
-    anchors = {target_entity_id, *consumed_entity_ids, *additional_entity_ids}
-    if focus_obligation_id is not None:
-        anchors.add(focus_obligation_id)
-    mandatory = anchors | {primary_entity_id} | {
+    """Select exact graph objects by persisted dependencies, never text ranking.
+
+    Inputs are mandatory text, not expansion anchors. Continuation and synthesis
+    traverse only forward dependencies; local proof work also receives direct
+    evidence and counterevidence. Omission does not change scientific state.
+    """
+    inputs = {primary_entity_id} | {
         int(link["entity_id"]) for link in full_context.workstream_links
         if int(link["workstream_id"]) == workstream_id and link["role"] == "input"
     }
+    selected = {target_entity_id, *consumed_entity_ids, *additional_entity_ids}
+    if focus_obligation_id is not None:
+        selected.add(focus_obligation_id)
+    mandatory = selected | inputs
     available = {int(entity["id"]) for entity in full_context.entities}
     missing = mandatory - available
     if missing:
         raise TheoryError(f"Mandatory research context entities are absent: {sorted(missing)}")
 
-    included = set(mandatory)
+    live_routes = live_construction_route_ids(full_context)
+    owners = {i: persisted_id_set(attrs.get(ROUTE_IDS))
+              for i, attrs in full_context.attributes.items()}
+    # Explicitly selected historical work retains its own dependency ancestry.
+    selected_routes = frozenset().union(*(
+        owners.get(i, frozenset()) for i in selected - inputs
+        if not owners.get(i, frozenset()) & live_routes
+    ))
+
+    def route_allowed(entity_id: int) -> bool:
+        roots = owners.get(entity_id, frozenset())
+        return not roots or bool(roots & live_routes)
+
+    continuation_artifacts: tuple[int, ...] = ()
+    if continuation_route_ids:
+        linked = {int(link["entity_id"]) for link in full_context.workstream_links
+                  if int(link["workstream_id"]) == workstream_id and link["role"] != "input"}
+        current_routes = live_routes & set(continuation_route_ids)
+        continuation_artifacts = tuple(sorted((
+            i for i in linked - inputs
+            if owners.get(i, frozenset()) & current_routes and route_entity_is_live(full_context, i)
+        ), reverse=True)[:4])
+    anchors = (selected - inputs) | set(continuation_artifacts)
+    included = mandatory | set(continuation_artifacts)
     active_relations = tuple(
         relation for relation in full_context.relations if relation["status"] == "active"
     )
-    for relation in active_relations:
-        endpoints = {int(relation["source_entity_id"]), int(relation["target_entity_id"])}
-        if endpoints & anchors:
-            included.update(endpoints)
-
     references_by_id: dict[int, set[int]] = {}
     for entity_id, attrs in full_context.attributes.items():
         references: set[int] = set()
@@ -146,31 +173,38 @@ def focus_research_context(
         except (KeyError, TypeError, ValueError):
             pass
         references_by_id[entity_id] = references
-        if entity_id in anchors:
-            included.update(references)
-        if references & anchors:
-            included.add(entity_id)
+    forward_only = bool(continuation_route_ids) or operation == "synthesize" or bool(consumed_entity_ids)
+    if not forward_only:
+        # Direct evidence around a non-contract target/focus is available for
+        # testing. Reverse neighborhoods are never recursively expanded.
+        for entity_id, references in references_by_id.items():
+            if references & anchors and route_allowed(entity_id):
+                included.add(entity_id)
+        for relation in active_relations:
+            source, target = int(relation["source_entity_id"]), int(relation["target_entity_id"])
+            if relation["relation_type"] in {"DEPENDS_ON", "USES"}:
+                continue  # Forward dependency closure below handles these.
+            endpoints = {source, target}
+            if endpoints & anchors:
+                included.update(i for i in endpoints if route_allowed(i))
 
-    # Follow explicit forward references of selected components, including their
-    # recorded ancestors. Do not recursively expand reverse neighbors or traverse
-    # contract inputs into unrelated branches. Finite visited sets handle cycles.
-    inputs = {primary_entity_id} | {
-        int(link["entity_id"]) for link in full_context.workstream_links
-        if int(link["workstream_id"]) == workstream_id and link["role"] == "input"
-    }
+    # Follow forward references from anchors and direct evidence, stopping at
+    # contract inputs. Finite visited sets preserve full chains and handle cycles.
     for relation in active_relations:
         if relation["relation_type"] in {"DEPENDS_ON", "USES"}:
             references_by_id.setdefault(int(relation["source_entity_id"]), set()).add(
                 int(relation["target_entity_id"])
             )
-    pending = sorted(anchors - inputs)
+    pending = sorted(included - inputs)
     visited: set[int] = set()
     while pending:
         entity_id = pending.pop()
         if entity_id in visited or entity_id not in available:
             continue
         visited.add(entity_id)
-        dependencies = references_by_id.get(entity_id, set()) & available
+        dependencies = {i for i in references_by_id.get(entity_id, set()) & available
+                        if i in mandatory or route_allowed(i)
+                        or owners.get(i, frozenset()) & selected_routes}
         included.update(dependencies)
         pending.extend(sorted(dependencies - visited - inputs))
 
@@ -206,6 +240,8 @@ def focus_research_context(
             "target_entity_id": target_entity_id,
             "focus_obligation_id": focus_obligation_id,
             "consumed_entity_ids": list(consumed_entity_ids),
+            "expansion_anchor_ids": sorted(anchors),
+            "continuation_artifact_ids": list(continuation_artifacts),
             "included_entity_ids": [int(entity["id"]) for entity in entities],
             "full_workstream_entity_count": len(full_context.entities),
             "focused_entity_count": len(entities),

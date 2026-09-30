@@ -580,13 +580,24 @@ context** is a pure transformation of that snapshot, used only for the prompt an
 validation of entity/source IDs returned by the model.
 
 `focus_research_context()` always keeps the primary, selected target, focus
-obligation, all consumed entities, and every workstream `input`. It adds one
-explicit provenance hop around target/focus/consumed anchors, using active graph
-relations and stored related/addressed/focus attributes. It does not recursively
-expand, rank prose, summarize, query the database, or impose a hard entity cap.
+obligation, all consumed entities, selected idea `exploits`, and every workstream
+`input`, preserving their complete text. Primary/input objects never expand the
+graph merely because they are the operation target. Expansion starts from the
+focus, consumed/exploited objects, non-input targets, and selected construction
+components. A continuation includes the latest up to four live artifacts owned
+by its persisted construction route and their explicit forward dependencies.
+Synthesis includes consumed artifacts and their explicit dependencies. Proof and
+attack also include direct evidence and obstruction/counterexample relations.
+Forward dependency chains are traversed completely, with cycle detection and
+contract inputs as traversal boundaries. Superseded or route-inactive branches
+are excluded unless explicitly selected; selected historical artifacts retain
+their dependency ancestry. There is no text ranking, summarization, clipping,
+database query during focusing, or global entity cap.
 Attributes, attached sources, links, selections, relations, and epistemic
 partitions are filtered to that view. Missing mandatory IDs fail clearly.
-`context_scope` records the selected IDs and full/focused counts. Omission means
+`context_scope` records included and expansion-anchor IDs and full/focused counts,
+both in the prompt and in the execution receipt's `context_scope_json` column.
+The receipt also retains exact `prompt_utf8_bytes`. Omission means
 only that this bounded execution policy did not select the entity; it is not a
 scientific relevance judgment. Prompts contain only the supplied focused graph
 and controller decision, with no retrieval or chat history. References to omitted
@@ -667,13 +678,20 @@ model self-grading fields, routing changes, or stopping threshold.
 The controller stops when:
 
 - every proof obligation reaches `resolved_candidate` through its own structurally complete candidate and bounded `no_critical_issue` attack—recorded explicitly as a non-verifying result;
-- every recorded branch is blocked, failed, or refuted;
+- at least one substantive construction route has existed, every construction route is inactive, and no active obligation, candidate, or bypass work remains;
 - two consecutive iterations have no material progress (duplicate-only/empty output without meaningful testing);
 - the response says human scientific judgment is required;
 - the call limit is reached; or
 - the local budget guard refuses the next call.
 
 Success, call-limit completion, or invocation-budget exhaustion sets lifecycle `completed`; no live branch, stagnation, or required human judgment sets it `blocked`; provider/output failure sets it `error`. Each budget refusal happens before the refused request or its execution iteration is recorded. Monthly-budget refusal leaves the workstream active. Any earlier paid planning receipt is retained. `workstream show` displays decisions, rationales, progress, duplicates, stop reasons, artifacts, reviews, and costs without a model call.
+
+Global branch exhaustion uses persisted construction-route roots and structural
+liveness. A standalone blocked obstruction, counterexample, or failed approach
+does not establish exhaustion when no substantive route has yet existed.
+Negative evidence remains auditable and may still refute its owned route.
+Terminal obstruction records also qualify for the existing concrete-refutation
+ideation trigger; model uncertainty text never determines route liveness.
 
 `human_judgment_required=true` is accepted only for `develop` targeting a supplied
 `role=input` problem-contract entity. The prompt reserves it for explicit contract/model
@@ -732,6 +750,9 @@ Migration behavior is explicit:
     keys, and the autoincrement sequence. It adds nullable `necessity_outcome`,
     `necessity_contract_entity_ids_json`, and `necessity_audit_summary`; historical
     rows remain NULL. Repeated migration is safe and foreign-key checks must pass.
+17. Schema version 16 (`research_execution_context_scope`) adds nullable
+    `api_calls.context_scope_json`. Historical receipts remain unchanged with
+    unknown scope (NULL); repeated migration is safe.
 
 Migration does not reinterpret old investigation JSON as sourced graph knowledge. Doing so would manufacture trust that V0.1 did not record. The legacy `idea`, `paper`, `investigate`, and `run show` commands remain available; new `idea add` and `paper add` operations also create linked graph entities.
 

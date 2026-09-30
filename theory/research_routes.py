@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .research_context import ResearchContext
 
 
 ROUTE_IDS = "research_construction_route_ids"
@@ -134,3 +138,63 @@ def backfill_construction_routes(con: sqlite3.Connection) -> None:
             "ORDER BY iteration_number", (ws["id"],),
         ).fetchall():
             record_construction_routes(con, dict(row), inputs[0])
+
+
+def _attribute(context: ResearchContext, entity_id: int, key: str) -> str | None:
+    return context.attributes.get(entity_id, {}).get(key)
+
+
+def _has_terminal_branch_state(context: ResearchContext, entity_id: int) -> bool:
+    attrs = context.attributes.get(entity_id, {})
+    state = attrs.get("research_branch_status") or attrs.get("develop_branch_status")
+    return state in {"blocked", "failed", "refuted"}
+
+
+def persisted_id_set(raw: object) -> frozenset[int]:
+    if not isinstance(raw, str):
+        return frozenset()
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return frozenset()
+    if not isinstance(values, list):
+        return frozenset()
+    try:
+        return frozenset(int(value) for value in values)
+    except (TypeError, ValueError):
+        return frozenset()
+
+
+def live_construction_route_ids(context: ResearchContext) -> frozenset[int]:
+    """Persisted route roots survive until challenged, terminal or superseded.
+
+    An unfinished component or testable/surviving root remains live across
+    controller calls. Scheduling order and strategist rankings play no role.
+    """
+    return frozenset(
+        entity_id for entity_id, attrs in context.attributes.items()
+        if STARTED_AT in attrs and not persisted_id_set(attrs.get(SUPERSEDED_BY))
+        and route_entity_is_live(context, entity_id)
+    )
+
+
+def route_entity_is_live(context: ResearchContext, entity_id: int) -> bool:
+    entity = next((e for e in context.entities if int(e["id"]) == entity_id), None)
+    return bool(
+        entity and entity["status"] == "active" and entity["trust_state"] != "contradicted"
+        and not _has_terminal_branch_state(context, entity_id)
+        and _attribute(context, entity_id, "research_obligation_state") != "blocked"
+        and _attribute(context, entity_id, "research_attack_state") != "challenged"
+        and not any(
+            e["entity_type"] in {"Counterexample", "Obstruction", "FailedApproach"}
+            and e["status"] == "active" and e["trust_state"] != "contradicted"
+            and _has_terminal_branch_state(context, int(e["id"]))
+            and entity_id in persisted_id_set(_attribute(context, int(e["id"]), "related_entity_ids"))
+            for e in context.entities
+        )
+        and not any(
+            (r["relation_type"] in {"CONTRADICTS", "REFUTES", "BLOCKS"} and int(r["target_entity_id"]) == entity_id)
+            or (r["relation_type"] == "FAILS_AT" and int(r["source_entity_id"]) == entity_id)
+            for r in context.relations
+        )
+    )

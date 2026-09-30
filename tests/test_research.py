@@ -2105,9 +2105,15 @@ def test_all_terminal_branches_stop_before_a_model_call(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     workstream, _ = make_research_workstream()
     with connect() as con:
+        route = add_entity(con, "Technique", "Established protocol route")
+        set_attribute(con, route, "research_artifact_type", "protocol_component")
+        set_attribute(con, route, "research_construction_started_iteration_id", "1")
+        set_attribute(con, route, "research_construction_route_ids", json.dumps([route]))
+        link_workstream_entity(con, workstream, route, "created")
         blocker = add_entity(con, "Obstruction", "Every branch hits the lower bound")
         set_attribute(con, blocker, "research_branch_status", "blocked")
         link_workstream_entity(con, workstream, blocker, "created")
+        add_relation(con, blocker, "BLOCKS", route)
     provider = DynamicProvider(lambda *_: pytest.fail("provider must not be called"))
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
 

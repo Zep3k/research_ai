@@ -9,7 +9,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 RESEARCH_NECESSITY_COLUMNS = {
     "necessity_outcome": "TEXT",
@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS api_calls (
     error_message TEXT,
     response_text TEXT,
     planning_metadata_json TEXT,
+    context_scope_json TEXT,
     uncached_input_tokens INTEGER CHECK (uncached_input_tokens >= 0),
     cache_read_input_tokens INTEGER CHECK (cache_read_input_tokens >= 0),
     cache_write_input_tokens INTEGER CHECK (cache_write_input_tokens >= 0),
@@ -1028,6 +1029,8 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     if version < 15:
         from .research_routes import backfill_construction_routes
         backfill_construction_routes(con)
+    if version < 16:
+        _add_column(con, "api_calls", "context_scope_json TEXT")
 
     _record_migration(con, 1, "initial_v01")
     _record_migration(con, 2, "harden_v01_calls_and_sources")
@@ -1044,6 +1047,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 13, "research_idea_origin_route")
     _record_migration(con, 14, "research_develop_provenance")
     _record_migration(con, 15, "research_construction_routes")
+    _record_migration(con, 16, "research_execution_context_scope")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -1087,6 +1091,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 13, "research_idea_origin_route")
         _record_migration(con, 14, "research_develop_provenance")
         _record_migration(con, 15, "research_construction_routes")
+        _record_migration(con, 16, "research_execution_context_scope")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
