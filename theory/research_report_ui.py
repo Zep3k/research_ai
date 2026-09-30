@@ -48,7 +48,7 @@ def render_research_report(report: ResearchReport, console: Console) -> None:
     if len(report.primary_goal_ids) == 1:
         overview.append(f"Research object: {entities[report.primary_goal_ids[0]].title}\n")
     overview.append(f"Lifecycle: {report.lifecycle_status}  |  Stop: {report.stop_reason or 'not recorded'}\n")
-    overview.append(f"Frontier: {len(frontier.open_obligation_ids)} open obligations · "
+    overview.append(f"Frontier: {len(frontier.open_obligation_ids)} active open obligations · "
                     f"{len(frontier.candidate_ids)} active candidates · {len(frontier.blocked_branch_ids)} closed branches\n")
     overview.append(frontier.description + "\n")
     overview.append(f"Calls: {report.execution.strategy_calls} strategy / {report.execution.execution_calls} execution"
@@ -60,7 +60,16 @@ def render_research_report(report: ResearchReport, console: Console) -> None:
 
     _table(console, "Proof obligations", ("Object", "Recorded state", "Candidates / route"), [
         (f"#{o.entity_id} {_short(entities[o.entity_id].title, 90)}",
-         f"{o.recorded_state or 'open (implicit)'}" + (f"; audit: {o.necessity_audit_state}" if o.necessity_audit_state else ""),
+         f"{o.recorded_state or 'open (implicit)'}" +
+         (f"; audit: {o.necessity_audit_state}" if o.necessity_audit_state else "") +
+         (f"; route inactive: owners {_ids(o.owning_bypass_candidate_ids)}"
+          if o.route_inactive_reason == "no_live_owning_bypass" else
+          f"; route inactive: constructions {_ids(o.owning_construction_route_ids)}"
+          if o.route_inactive_reason == "no_live_owning_construction" else
+          "; route inactive: replacement is terminal or challenged"
+          if o.route_inactive_reason == "replacement_not_live" else
+          f"; route inactive: parents {_ids(o.parent_obligation_ids)}"
+          if o.route_inactive_reason == "inactive_parent_obligation" else ""),
          f"attempts: {_ids(o.candidate_ids)}" +
          (f"; survivor: #{o.surviving_candidate_id}" if o.surviving_candidate_id else "") +
          ("; reactivated" if o.reactivations else "")) for o in report.obligations

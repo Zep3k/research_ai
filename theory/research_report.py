@@ -21,8 +21,10 @@ from .errors import TheoryError
 from .paths import DB_PATH
 from .research import (
     INACTIVE_OBLIGATION_STATES, ROOT_TARGET_TYPES, TERMINAL_BRANCH_STATES, _open_obligation_ids,
-    bypass_route_is_live,
+    _obligation_route_activity, _persisted_open_obligation_ids, _route_entity_is_live,
+    bypass_route_is_live, live_construction_route_ids,
 )
+from .research_routes import ROUTE_IDS
 from .research_context import ResearchContext, _build_context
 
 
@@ -76,6 +78,11 @@ class ObligationReport(ReportModel):
     entity_id: int
     recorded_state: str | None
     open_under_controller_rules: bool
+    route_inactive_reason: str | None
+    owning_bypass_candidate_ids: tuple[int, ...]
+    owning_construction_route_ids: tuple[int, ...]
+    live_owning_construction_route_ids: tuple[int, ...]
+    parent_obligation_ids: tuple[int, ...]
     necessity_audit_state: str | None
     candidate_ids: tuple[int, ...]
     surviving_candidate_id: int | None
@@ -312,7 +319,11 @@ def _entities(snapshot: ReportSnapshot) -> tuple[EntityReport, ...]:
 
 
 def _obligations(context: ResearchContext, entities: tuple[EntityReport, ...], primary_ids: tuple[int, ...]) -> tuple[ObligationReport, ...]:
-    open_ids = set(_open_obligation_ids(context, context.workstream["id"], primary_ids[0] if len(primary_ids) == 1 else -1))
+    primary_id = primary_ids[0] if len(primary_ids) == 1 else -1
+    active, owners, parents = _obligation_route_activity(context, context.workstream["id"], primary_id)
+    open_ids = set(active)
+    persisted_open = set(_persisted_open_obligation_ids(context, context.workstream["id"], primary_id))
+    live_roots = live_construction_route_ids(context)
     result = []
     for entity in entities:
         attrs = context.attributes.get(entity.id, {})
@@ -347,6 +358,17 @@ def _obligations(context: ResearchContext, entities: tuple[EntityReport, ...], p
         result.append(ObligationReport(
             entity_id=entity.id, recorded_state=attrs.get("research_obligation_state"),
             open_under_controller_rules=entity.id in open_ids,
+            route_inactive_reason=(
+                "replacement_not_live" if entity.id in owners and not _route_entity_is_live(context, entity.id)
+                else "no_live_owning_construction" if _ids(attrs.get(ROUTE_IDS))
+                and not set(_ids(attrs.get(ROUTE_IDS))) & live_roots
+                else "no_live_owning_bypass" if entity.id in owners
+                else "inactive_parent_obligation"
+            ) if entity.id in persisted_open - open_ids else None,
+            owning_bypass_candidate_ids=owners.get(entity.id, ()),
+            owning_construction_route_ids=_ids(attrs.get(ROUTE_IDS)),
+            live_owning_construction_route_ids=tuple(sorted(set(_ids(attrs.get(ROUTE_IDS))) & live_roots)),
+            parent_obligation_ids=parents.get(entity.id, ()),
             necessity_audit_state=attrs.get("research_necessity_audit_state"),
             candidate_ids=tuple(e.id for e in entities if entity.id in e.attempted_obligation_ids),
             surviving_candidate_id=_id(attrs.get("research_surviving_candidate_id")),
@@ -505,7 +527,8 @@ def report_from_snapshot(snapshot: ReportSnapshot) -> ResearchReport:
                             and bool(set(entity.link_roles) & {"input", "created", "modified"}))
                         or entity.branch_state == "promising"))
     pending = tuple(sorted({candidate for obligation in obligations
-                            if obligation.recorded_state in {"candidate_pending_attack", "reframe_pending_attack"}
+                            if obligation.open_under_controller_rules
+                            and obligation.recorded_state in {"candidate_pending_attack", "reframe_pending_attack"}
                             for candidate in (*obligation.candidate_ids, *(route.candidate_id for route in obligation.routes))}))
     open_ids = tuple(o.entity_id for o in obligations if o.open_under_controller_rules)
     description = ("Human judgment requested by the recorded stop." if stop_reason == "human_judgment_required" else

@@ -13,11 +13,14 @@ from theory.errors import ModelOutputError
 from theory.graph import add_entity, link_workstream_entity, set_attribute
 from theory.research import (
     LegalResearchMove, OperationChoice, ProblemContractBrief, ResearchStepReport,
-    StrategistDecision, _open_obligation_ids, _research_prompt, _validate_step_report,
+    StrategistDecision, _active_obligation_history, _open_obligation_ids,
+    _persisted_open_obligation_ids,
+    _research_prompt, _validate_step_report,
     build_research_state, choose_model_route, choose_next_operation,
-    generate_legal_research_moves, research,
+    generate_legal_research_moves, reactivate_bypassed_obligations, research,
 )
 from theory.research_context import for_workstream
+from theory.research_report import build_research_report
 from test_research import (
     add_linked_research_entity, artifact, completed_history, decision_from_prompt, init_workspace,
     make_research_workstream, step_report,
@@ -222,6 +225,13 @@ def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, rep
             assert candidate == decision["target_entity_id"]
             assert after.attributes[candidate]["research_reframe_target_obligation_id"] == str(obligation)
             assert obligation in _open_obligation_ids(after, workstream, primary_id)
+            if replacement:
+                pending_replacements = json.loads(
+                    after.attributes[candidate]["research_bypass_replacement_obligation_ids"]
+                )
+                assert not set(pending_replacements) & set(_open_obligation_ids(
+                    after, workstream, primary_id,
+                ))
             assert next(entity for entity in after.entities if entity["id"] == candidate)["trust_state"] == "quarantined"
             _, _, _, pending_moves, _ = planning(wa)
             assert next(move for move in pending_moves if move.focus_obligation_id == obligation).operation == "attack"
@@ -259,7 +269,7 @@ def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, rep
     assert iterations[0]["progress_class"] == "obligation_audited"
     assert iterations[0]["resolution_progress"] == 0
     assert iterations[1]["progress_class"] == "obligation_bypassed"
-    assert iterations[1]["resolution_progress"] == 1
+    assert iterations[1]["resolution_progress"] == (0 if replacement else 1)
     assert iterations[1]["resolved_obligation_count"] == 0  # Retraction is not a proof.
     assert receipts[0] == ("research:strategy", "openai", "gpt-6-luna")
     assert receipts[1] == ("research:reframe", "openai", "gpt-6-sol")
@@ -509,6 +519,134 @@ def activate_bypass(wa, monkeypatch, *, replacement=True):
     return requests, outcome, candidate, replacements
 
 
+def activate_two_replacement_bypass(wa, monkeypatch):
+    execute_one = responder(wa, replacement=True)
+
+    def execute(decision, number):
+        report = execute_one(decision, number)
+        if decision["operation"] == "reframe":
+            report["artifacts"].append(artifact(
+                "proof_obligation", "Show the alternate route preserves termination under delayed evidence.",
+                "alternate_route_termination", [wa[3], wa[2]],
+            ))
+            report["necessity_audit"]["replacement_obligation_keys"].append(
+                "alternate_route_termination"
+            )
+        return report
+
+    install_providers(monkeypatch, execute=execute, select=select_audit_or_attack)
+    research(wa[0], max_calls=2)
+    context = for_workstream(wa[0])
+    candidate = int(context.attributes[wa[3]]["research_reframe_candidate_id"])
+    replacements = json.loads(context.attributes[candidate]["research_bypass_replacement_obligation_ids"])
+    assert len(replacements) == 2
+    return candidate, replacements
+
+
+def test_failed_bypass_replacements_and_descendants_leave_active_frontier(wa, monkeypatch):
+    workstream, primary_id, _, parent = wa
+    candidate, (x, y) = activate_two_replacement_bypass(wa, monkeypatch)
+    assert set(_open_obligation_ids(for_workstream(workstream), workstream, primary_id)) == {x, y}
+
+    child = add_linked_research_entity(workstream, "OpenQuestion", "Child premise of X", proof_obligation=True)
+    grandchild = add_linked_research_entity(workstream, "OpenQuestion", "Grandchild premise of X", proof_obligation=True)
+    with connect() as con:
+        set_attribute(con, child, "research_focus_obligation_id", str(x))
+        set_attribute(con, child, "related_entity_ids", json.dumps([x]))
+        set_attribute(con, grandchild, "research_focus_obligation_id", str(child))
+        set_attribute(con, grandchild, "related_entity_ids", json.dumps([child]))
+        # A later bounded critical attack has challenged the bypass itself.
+        set_attribute(con, candidate, "research_attack_state", "challenged")
+    assert [e.kind for e in reactivate_bypassed_obligations(workstream)] == ["obligation_reactivated"]
+
+    context, primary, history, moves, state = planning(wa)
+    stale = {x, y, child, grandchild}
+    assert stale <= set(_persisted_open_obligation_ids(context, workstream, primary_id))
+    assert context.attributes[parent]["research_obligation_state"] == "open"
+    assert _open_obligation_ids(context, workstream, primary_id) == (parent,)
+    assert [o.id for o in state.open_obligations] == [parent]
+    assert all(move.focus_obligation_id not in stale and move.target_entity_id not in stale
+               for move in moves)
+    assert choose_next_operation(context, workstream, primary, history).focus_obligation_id == parent
+
+    report = build_research_report(workstream)
+    by_id = {o.entity_id: o for o in report.obligations}
+    assert report.frontier.open_obligation_ids == (parent,)
+    assert all(not by_id[i].open_under_controller_rules for i in stale)
+    assert all(by_id[i].recorded_state == "open" for i in (x, y))
+    assert all(by_id[i].route_inactive_reason == "no_live_owning_bypass" for i in (x, y))
+    assert all(by_id[i].owning_bypass_candidate_ids == (candidate,) for i in (x, y))
+    assert all(by_id[i].route_inactive_reason == "inactive_parent_obligation"
+               for i in (child, grandchild))
+    rendered = CliRunner().invoke(app, ["research-report", str(workstream)])
+    assert rendered.exit_code == 0, rendered.output
+    assert "route inactive" in rendered.output
+
+    stale_history = tuple({"id": 100 + n, "iteration_number": 100 + n,
+                           "status": "completed", "operation": "develop",
+                           "target_entity_id": x, "focus_obligation_id": x,
+                           "resolution_progress": 0, "material_progress": False}
+                          for n in range(3))
+    filtered = _active_obligation_history(
+        context, workstream, primary_id, (*history, *stale_history),
+    )
+    assert filtered == history
+    projected = build_research_state(
+        context, workstream_id=workstream, primary=primary,
+        history=(*history, *stale_history), legal_moves=moves,
+    )
+    assert all(row.iteration_number < 100 for row in projected.recent_iterations)
+
+    # Reloading from SQLite reconstructs the same frontier and deterministic move.
+    again = for_workstream(workstream)
+    assert _open_obligation_ids(again, workstream, primary_id) == (parent,)
+    assert choose_next_operation(again, workstream, primary, history).focus_obligation_id == parent
+
+    with connect() as con:
+        con.execute("UPDATE workstreams SET status='active' WHERE id=?", (workstream,))
+    requests, _ = install_providers(monkeypatch, execute=lambda decision, _: step_report(
+        decision, [artifact("failed_approach", "The original route still lacks a valid parent proof.",
+                            "resumed_parent_check", [parent, *decision["required_consumed_entity_ids"]],
+                            branch_status="failed")],
+    ))
+    assert research(workstream, provider_name="openai", strategy="off", max_calls=1).calls_made == 1
+    execution = next(request for _, request in requests if request["response_model"] is ResearchStepReport)
+    resumed = decision_from_prompt(execution["prompt"])
+    assert resumed["focus_obligation_id"] == resumed["target_entity_id"] == parent
+
+
+def test_shared_replacement_stays_active_and_failed_route_can_revive(wa, monkeypatch):
+    workstream, primary_id, _, parent = wa
+    candidate, (x, y) = activate_two_replacement_bypass(wa, monkeypatch)
+    other_parent = add_linked_research_entity(
+        workstream, "OpenQuestion", "Independent parent requirement", proof_obligation=True,
+    )
+    other = add_linked_research_entity(workstream, "Finding", "Separately audited bypass route")
+    with connect() as con:
+        for key, value in {
+            "research_reframe_target_obligation_id": str(other_parent),
+            "research_bypass_replacement_obligation_ids": json.dumps([x]),
+            "research_bypass_activated_iteration_id": "1",
+            "research_attack_state": "survived_attack",
+        }.items():
+            set_attribute(con, other, key, value)
+        set_attribute(con, candidate, "research_attack_state", "challenged")
+    reactivate_bypassed_obligations(workstream)
+    context = for_workstream(workstream)
+    assert set(_open_obligation_ids(context, workstream, primary_id)) == {parent, other_parent, x}
+    assert y not in _open_obligation_ids(context, workstream, primary_id)
+    report = build_research_report(workstream)
+    shared = next(o for o in report.obligations if o.entity_id == x)
+    assert shared.owning_bypass_candidate_ids == tuple(sorted((candidate, other)))
+    assert shared.route_inactive_reason is None
+
+    with connect() as con:
+        set_attribute(con, candidate, "research_attack_state", "survived_attack")
+    assert set(_open_obligation_ids(for_workstream(workstream), workstream, primary_id)) == {
+        parent, other_parent, x, y,
+    }
+
+
 @pytest.mark.parametrize("terminal", ["blocked", "failed", "refuted", "contradicted"])
 def test_wa_bypass_reopens_without_calls_and_keeps_history(wa, monkeypatch, terminal):
     from theory.research import bypass_route_is_live, reactivate_bypassed_obligations
@@ -559,7 +697,12 @@ def test_one_surviving_replacement_keeps_route_live(wa, monkeypatch):
         set_attribute(con, other, "research_attack_state", "inconclusive")
     assert bypass_route_is_live(for_workstream(wa[0]), wa[3], candidate)
     assert reactivate_bypassed_obligations(wa[0]) == ()
-    assert for_workstream(wa[0]).attributes[wa[3]]["research_obligation_state"] == "bypassed"
+    context = for_workstream(wa[0])
+    assert context.attributes[wa[3]]["research_obligation_state"] == "bypassed"
+    assert _open_obligation_ids(context, wa[0], wa[1]) == (other,)
+    failed = next(o for o in build_research_report(wa[0]).obligations
+                  if o.entity_id == replacements[0])
+    assert failed.route_inactive_reason == "replacement_not_live"
 
 
 def test_another_surviving_bypass_candidate_prevents_reactivation(wa, monkeypatch):
@@ -779,7 +922,7 @@ def test_route_failure_during_execution_records_reactivation_progress(wa, monkey
     assert len(requests) == result.total_api_calls_made == 2
     with connect() as con:
         row = dict(con.execute("SELECT * FROM research_iterations ORDER BY id DESC LIMIT 1").fetchone())
-    assert row["open_obligations_before"] == 1 and row["open_obligations_after"] == 2
+    assert row["open_obligations_before"] == 1 and row["open_obligations_after"] == 1
     assert row["resolution_progress"] == 0
     events = json.loads(row["progress_events_json"])
     assert {e["kind"] for e in events} == {"branch_closed", "obligation_reactivated"}

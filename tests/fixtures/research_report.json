@@ -209,6 +209,11 @@
       "entity_id": 2,
       "recorded_state": "bypassed",
       "open_under_controller_rules": false,
+      "route_inactive_reason": null,
+      "owning_bypass_candidate_ids": [],
+      "owning_construction_route_ids": [],
+      "live_owning_construction_route_ids": [],
+      "parent_obligation_ids": [],
       "necessity_audit_state": "bypassed",
       "candidate_ids": [],
       "surviving_candidate_id": null,
@@ -228,6 +233,13 @@
       "entity_id": 3,
       "recorded_state": "candidate_pending_attack",
       "open_under_controller_rules": true,
+      "route_inactive_reason": null,
+      "owning_bypass_candidate_ids": [
+        5
+      ],
+      "owning_construction_route_ids": [],
+      "live_owning_construction_route_ids": [],
+      "parent_obligation_ids": [],
       "necessity_audit_state": null,
       "candidate_ids": [
         4

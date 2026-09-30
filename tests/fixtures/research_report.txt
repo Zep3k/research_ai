@@ -2,7 +2,7 @@
 │ Find a weak-agreement construction                                                                         │
 │ Research object: Weak agreement under partial synchrony                                                    │
 │ Lifecycle: active  |  Stop: not recorded                                                                   │
-│ Frontier: 1 open obligations · 1 active candidates · 1 closed branches                                     │
+│ Frontier: 1 active open obligations · 1 active candidates · 1 closed branches                              │
 │ Independent candidate attacks are pending.                                                                 │
 │ Calls: 1 strategy / 2 execution / 0 other  |  Recorded cost: $0.002000                                     │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

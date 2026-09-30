@@ -9,7 +9,7 @@ from typing import Iterator
 from .paths import DB_PATH
 
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 RESEARCH_NECESSITY_COLUMNS = {
     "necessity_outcome": "TEXT",
@@ -1025,6 +1025,10 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     if needs_graph_backfill:
         _backfill_legacy_entities(con)
 
+    if version < 15:
+        from .research_routes import backfill_construction_routes
+        backfill_construction_routes(con)
+
     _record_migration(con, 1, "initial_v01")
     _record_migration(con, 2, "harden_v01_calls_and_sources")
     _record_migration(con, 3, "typed_research_graph")
@@ -1039,6 +1043,7 @@ def _migrate_existing(con: sqlite3.Connection) -> None:
     _record_migration(con, 12, "research_ideation_call_metadata")
     _record_migration(con, 13, "research_idea_origin_route")
     _record_migration(con, 14, "research_develop_provenance")
+    _record_migration(con, 15, "research_construction_routes")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -1081,6 +1086,7 @@ def initialize(name: str) -> None:
         _record_migration(con, 12, "research_ideation_call_metadata")
         _record_migration(con, 13, "research_idea_origin_route")
         _record_migration(con, 14, "research_develop_provenance")
+        _record_migration(con, 15, "research_construction_routes")
         con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 

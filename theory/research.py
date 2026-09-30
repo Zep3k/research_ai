@@ -37,6 +37,7 @@ from .research_ideation import (
 from .research_progress import (
     ProgressEvent, ProgressEventKind, ProgressLevel, ProgressRecord, progress_event_kinds,
 )
+from .research_routes import ROUTE_IDS, STARTED_AT, SUPERSEDED_BY, record_construction_routes
 
 
 STRATEGIST_MAX_OUTPUT_TOKENS = 4000
@@ -798,7 +799,8 @@ def _is_precise_candidate(context: ResearchContext, entity: dict) -> bool:
 
 
 def _obligation_ids(
-    context: ResearchContext, workstream_id: int, primary_entity_id: int
+    context: ResearchContext, workstream_id: int, primary_entity_id: int, *,
+    include_inactive_entities: bool = False,
 ) -> tuple[int, ...]:
     linked = _linked_ids(context, workstream_id)
     obligations: list[int] = []
@@ -807,7 +809,7 @@ def _obligation_ids(
         if (
             entity_id not in linked
             or entity_id == primary_entity_id
-            or entity["status"] != "active"
+            or (entity["status"] != "active" and not include_inactive_entities)
         ):
             continue
         attrs = context.attributes.get(entity_id, {})
@@ -825,7 +827,7 @@ def _obligation_ids(
     return tuple(sorted(obligations))
 
 
-def _open_obligation_ids(
+def _persisted_open_obligation_ids(
     context: ResearchContext, workstream_id: int, primary_entity_id: int
 ) -> tuple[int, ...]:
     return tuple(
@@ -834,6 +836,112 @@ def _open_obligation_ids(
         if _attribute(context, entity_id, "research_obligation_state")
         not in INACTIVE_OBLIGATION_STATES
     )
+
+
+def _obligation_route_activity(
+    context: ResearchContext, workstream_id: int, primary_entity_id: int,
+) -> tuple[tuple[int, ...], dict[int, tuple[int, ...]], dict[int, tuple[int, ...]]]:
+    """Derive route attachment from construction ownership, bypasses and parents.
+
+    An obligation's persisted state is unchanged. Replacement premises depend on
+    a surviving owning bypass; other descendants depend on their explicit parent
+    obligations. A shared premise remains attached through any live route.
+    """
+    obligation_ids = set(_obligation_ids(
+        context, workstream_id, primary_entity_id, include_inactive_entities=True,
+    ))
+    persisted_open = set(_persisted_open_obligation_ids(context, workstream_id, primary_entity_id))
+    owners: dict[int, set[int]] = {}
+    owner_parents: dict[int, set[int]] = {}
+    linked = _linked_ids(context, workstream_id)
+    for candidate_id in sorted(linked):
+        attrs = context.attributes.get(candidate_id, {})
+        raw = attrs.get("research_bypass_replacement_obligation_ids")
+        if raw is None:
+            continue
+        parent = _explicit_obligation_id(attrs.get("research_reframe_target_obligation_id"), obligation_ids)
+        if parent is None:
+            continue
+        replacements = json.loads(raw)
+        if not isinstance(replacements, list) or any(type(i) is not int or i <= 0 for i in replacements):
+            raise TheoryError("Invalid persisted bypass replacement provenance.")
+        for replacement in replacements:
+            if replacement in obligation_ids:
+                owners.setdefault(replacement, set()).add(candidate_id)
+                owner_parents.setdefault(replacement, set()).add(parent)
+
+    parents: dict[int, tuple[int, ...]] = {}
+    for obligation_id in obligation_ids - owners.keys():
+        attrs = context.attributes.get(obligation_id, {})
+        focus = _explicit_obligation_id(attrs.get("research_focus_obligation_id"), obligation_ids)
+        parent_ids = ({focus} if focus is not None else
+                      set(_stored_id_set(attrs.get("related_entity_ids")) & obligation_ids))
+        parent_ids.discard(obligation_id)
+        parents[obligation_id] = tuple(sorted(parent_ids))
+
+    route_owned = {
+        i: _stored_id_set(_attribute(context, i, ROUTE_IDS)) for i in obligation_ids
+    }
+    live_routes = live_construction_route_ids(context)
+    route_allowed = {i for i, roots in route_owned.items() if not roots or roots & live_routes}
+    # Bypass descendants still require an attached parent. Ordinary ownership
+    # may be shared across routes even when an older parent route was superseded.
+    bypass_descendants = set(owners)
+    while True:
+        added = {i for i, parent_ids in parents.items()
+                 if set(parent_ids) & bypass_descendants} - bypass_descendants
+        if not added:
+            break
+        bypass_descendants.update(added)
+    attached = {
+        i for i, parent_ids in parents.items() if i in route_allowed and (
+            not parent_ids or (i not in bypass_descendants
+                              and _attribute(context, i, ROUTE_IDS) is not None)
+        )
+    }
+    while True:
+        added = {
+            i for i in (obligation_ids - attached) & route_allowed
+            if (any(parent in attached for parent in parents.get(i, ()))
+                if i not in owners else _route_entity_is_live(context, i) and any(
+                    parent in attached and bypass_route_is_live(context, parent, candidate_id)
+                    for candidate_id in owners[i] for parent in owner_parents[i]
+                    if _attribute(context, candidate_id, "research_reframe_target_obligation_id") == str(parent)
+                ))
+        }
+        if not added:
+            break
+        attached.update(added)
+
+    active = tuple(sorted(persisted_open & attached))
+    return (active,
+            {i: tuple(sorted(ids)) for i, ids in owners.items()},
+            parents)
+
+
+def live_construction_route_ids(context: ResearchContext) -> frozenset[int]:
+    """Persisted route roots survive until challenged, terminal or superseded.
+
+    An unfinished component or testable/surviving root remains live across
+    controller calls. Scheduling order and strategist rankings play no role.
+    """
+    return frozenset(
+        entity_id for entity_id, attrs in context.attributes.items()
+        if STARTED_AT in attrs and not _stored_id_set(attrs.get(SUPERSEDED_BY))
+        and _route_entity_is_live(context, entity_id)
+    )
+
+
+def _construction_entity_is_active(context: ResearchContext, entity_id: int) -> bool:
+    roots = _stored_id_set(_attribute(context, entity_id, ROUTE_IDS))
+    return not roots or bool(roots & live_construction_route_ids(context))
+
+
+def _open_obligation_ids(
+    context: ResearchContext, workstream_id: int, primary_entity_id: int
+) -> tuple[int, ...]:
+    """Open obligations supported by at least one live construction route."""
+    return _obligation_route_activity(context, workstream_id, primary_entity_id)[0]
 
 
 def _candidate_has_unresolved_critical_issue(
@@ -1002,6 +1110,7 @@ def _relevant_synthesis_inputs(
         and entity["status"] == "active"
         and entity["trust_state"] != "contradicted"
         and not _has_terminal_branch_state(context, int(entity["id"]))
+        and _construction_entity_is_active(context, int(entity["id"]))
         and entity["entity_type"] in SYNTHESIS_INPUT_TYPES
         and _entity_is_relevant_to_obligation(context, int(entity["id"]), obligation_id)
     ]
@@ -1112,6 +1221,7 @@ def _relevant_prove_candidates(
         if int(entity["id"]) in linked
         and entity["entity_type"] != "ProofAttempt"
         and _is_precise_candidate(context, entity)
+        and _construction_entity_is_active(context, int(entity["id"]))
         and not _completed_for_target(history, "prove", int(entity["id"]))
         and _entity_is_relevant_to_obligation(
             context, int(entity["id"]), obligation_id
@@ -1147,6 +1257,7 @@ def _relevant_unattacked_proof_attempts(
             or entity["entity_type"] != "ProofAttempt"
             or entity["status"] != "active"
             or entity["trust_state"] == "contradicted"
+            or not _construction_entity_is_active(context, entity_id)
             or _completed_for_target(history, "attack", entity_id)
         ):
             continue
@@ -1226,6 +1337,21 @@ def _iteration_focus_obligation_id(
     if len(connected_obligations) == 1:
         return next(iter(connected_obligations))
     return None
+
+
+def _active_obligation_history(
+    context: ResearchContext, workstream_id: int, primary_entity_id: int,
+    history: tuple[dict, ...],
+) -> tuple[dict, ...]:
+    """Exclude work on detached premises from current strategy evidence."""
+    completed = _scientific_history(history)
+    inactive = (set(_persisted_open_obligation_ids(context, workstream_id, primary_entity_id))
+                - set(_open_obligation_ids(context, workstream_id, primary_entity_id)))
+    if not inactive:
+        return completed
+    all_ids = set(_obligation_ids(context, workstream_id, primary_entity_id))
+    return tuple(row for row in completed
+                 if _iteration_focus_obligation_id(context, row, all_ids) not in inactive)
 
 
 def eligible_open_obligation_ids(
@@ -1411,6 +1537,7 @@ def _constructive_continuation(
         and _attribute(context, entity_id, "research_branch_status") == "unresolved"
         and target in _stored_id_set(_attribute(context, entity_id, "related_entity_ids"))
         and _route_entity_is_live(context, entity_id)
+        and _construction_entity_is_active(context, entity_id)
         for entity_id in accepted
     ):
         return None
@@ -1444,6 +1571,7 @@ def choose_next_operation(
         entity_by_id[entity_id]
         for entity_id in linked
         if entity_id in entity_by_id and _is_precise_candidate(context, entity_by_id[entity_id])
+        and _construction_entity_is_active(context, entity_id)
     ]
     precise.sort(
         key=lambda entity: (
@@ -1694,6 +1822,7 @@ def generate_legal_research_moves(
                     and entity_id != baseline.target_entity_id
                     and entity["entity_type"] == "ProofAttempt"
                     and _is_precise_candidate(context, entity)
+                    and _construction_entity_is_active(context, entity_id)
                     and not _has_terminal_branch_state(context, entity_id)
                     and not _completed_for_target(history, "attack", entity_id)
                 ):
@@ -1810,7 +1939,7 @@ def build_research_state(
     legal_moves: tuple[LegalResearchMove, ...],
 ) -> ResearchState:
     """Build a deterministic compact view using only already-loaded state."""
-    history = _scientific_history(history)
+    history = _active_obligation_history(context, workstream_id, int(primary["id"]), history)
     by_id = {int(entity["id"]): entity for entity in context.entities}
 
     def brief(entity: dict) -> ResearchEntityBrief:
@@ -2240,6 +2369,7 @@ def _persist_step(
     artifact_ids: list[int] = []
     accepted: list[tuple[ResearchArtifact, int]] = []
     attempted_by_entity: dict[int, tuple[int, ...]] = {}
+    reused_obligation_ids: list[int] = []
     duplicate_count = 0
     with connect() as con:
         for artifact in report.artifacts:
@@ -2248,6 +2378,12 @@ def _persist_step(
                 tokens, fingerprints
             ):
                 duplicate_count += 1
+                reused_obligation_ids.extend(
+                    i for i, attrs in context.attributes.items()
+                    if artifact.artifact_type == "proof_obligation"
+                    and attrs.get("research_material_key") == artifact.material_key
+                    and attrs.get("research_artifact_type") == "proof_obligation"
+                )
                 continue
             entity_id = add_entity(
                 con,
@@ -2456,6 +2592,11 @@ def _persist_step(
              report.necessity_outcome, json.dumps(report.necessity_contract_entity_ids),
              json.dumps({"summary": report.summary, "audit": report.necessity_audit.model_dump()}, ensure_ascii=False)
              if choice.operation == "reframe" else None, iteration_id),
+        )
+        receipt = dict(con.execute("SELECT * FROM research_iterations WHERE id=?", (iteration_id,)).fetchone())
+        record_construction_routes(
+            con, receipt, int(_primary_target(context, workstream_id)["id"]),
+            reused_obligation_ids=tuple(reused_obligation_ids),
         )
 
     return PersistedStep(
@@ -2803,7 +2944,11 @@ def _run_research(
         ideation_call_id = None
         # Reserve both a generator and selector slot. A one-call run cannot ideate.
         if strategy_enabled and not ideation_calls_made and max_calls - strategy_calls_made >= 2:
-            trigger = choose_ideation_trigger(full_context, history, previous_ideations(workstream_id))
+            trigger = choose_ideation_trigger(
+                full_context,
+                _active_obligation_history(full_context, workstream_id, int(primary["id"]), history),
+                previous_ideations(workstream_id),
+            )
             root_develop = next((move for move in legal_moves
                                  if move.operation == "develop" and move.target_entity_id == int(primary["id"])
                                  and move.focus_obligation_id is None), None)

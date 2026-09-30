@@ -517,8 +517,25 @@ between iterations append `obligation_reactivated` event metadata on the origina
 entity without inventing a research iteration. Workstream lifecycle/resume rules stay
 unchanged.
 
-Schema **11** already supports this provenance and the new outcome strings: no schema
-rewrite or history backfill is needed. Historical `necessary`/`unnecessary` outcomes
+Ordinary controller constructions also have persisted route ownership. Schema **15**
+records `research_construction_route_ids` on outputs and the originating iteration on
+each construction root. Direct obligation descendants inherit that ownership; a shared
+obligation can name several roots, and an explicit empty owner list is route-neutral.
+An unfinished or testable root remains live until graph-recorded challenge, terminal
+state, or supersession. A top-level frontier/idea develop with accepted construction
+records departure from the route on the controller's persisted execution path.
+Independent routes remain live. Continuations, duplicate-only steps, and
+obligation-only output do not establish such a departure.
+
+Both strategic moves and deterministic fallback use this active frontier. Inactive
+route obligations retain their recorded state, source metadata, relations and history;
+`research-report` exposes their owners and inactivity reason. Migration reconstructs
+ownership from completed controller artifact receipts and recorded develop provenance.
+Objects with no reconstructible route remain neutral. Scheduling order, artifact age
+and strategist preferences never establish route inactivity.
+
+Bypass provenance and its outcome strings were introduced in schema **11**.
+Historical `necessary`/`unnecessary` outcomes
 and `obligation_retracted` events remain readable. Legacy `unnecessary` states lacking
 explicit viable route provenance conservatively reopen at reconciliation; no direct
 discharge is fabricated. New model responses use only the new vocabulary and grounding
