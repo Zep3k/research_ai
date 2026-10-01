@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from .prompts import PromptContent
+from .research_negative_memory import negative_memory_section
 
 if TYPE_CHECKING:
     from .research import OperationChoice, ProblemContractBrief, ResearchState
@@ -549,6 +550,7 @@ Do not mark existing obligations resolved merely because a new branch exists.
             focus_reference_instruction,
             operation_output_instructions.bindings,
             exact_contract,
+            negative_memory_section(context) if choice.operation != "attack" else "",
             "CONTROLLER DECISION\n" + json.dumps(decision, indent=2, sort_keys=True),
             "GRAPH CONTEXT\n" + json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False),
         ),

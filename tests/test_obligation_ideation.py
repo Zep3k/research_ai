@@ -178,7 +178,7 @@ def test_local_prompt_retains_contract_route_and_failed_mechanism_excludes_old_r
     failure = add_work(ws, "obstruction", route=root, state="blocked", related=(child,))
     old = add_work(ws, "proof_attempt", related=(primary,))
     mark(old, **{ROUTE_IDS: json.dumps([old]), STARTED_AT: "1", SUPERSEDED_BY: json.dumps([root])})
-    stale = add_work(ws, "failed_approach", route=old, state="refuted", related=(primary, obligation))
+    stale = add_work(ws, "failed_approach", route=old, state="refuted", related=(primary,))
     with connect() as con:
         add_relation(con, failure, "REFUTES", child)
         con.execute("UPDATE entities SET body='FAILED_LOCAL_MECHANISM' WHERE id=?", (failure,))

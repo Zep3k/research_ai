@@ -13,6 +13,7 @@ from .db import connect
 from .errors import ModelOutputError
 from .jsonutil import parse_json_model
 from .prompts import PromptContent
+from .research_negative_memory import negative_memory_section
 from .research_routes import route_entity_is_live
 
 if TYPE_CHECKING:
@@ -208,7 +209,8 @@ exploration, not a new top-level route or an assumption that the obligation is s
         state["focus_obligation_id"] = trigger.focus_obligation_id
     return PromptContent(
         stable_prefix=instructions + "\n\n",
-        dynamic_suffix="IDEATION STATE\n" + json.dumps(state, sort_keys=True, ensure_ascii=False),
+        dynamic_suffix=(negative_memory_section(context) + "\n\n" if context.selections.get("negative_memory_ids") else "")
+        + "IDEATION STATE\n" + json.dumps(state, sort_keys=True, ensure_ascii=False),
     )
 
 

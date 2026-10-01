@@ -644,7 +644,22 @@ Top-level ideation uses the same pure scoping helper with the full input contrac
 live route roots, the latest up to four live artifacts per root, directly attached
 negative evidence, and current trigger entities with their dependencies. Triggers
 owned only by inactive routes do not cause an ideation call. Its receipt also stores
-normal `context_scope` telemetry. Obligation-level ideation scoping is unchanged.
+normal `context_scope` telemetry. Both ideation contexts receive the bounded memory below.
+Generation (`develop`, `synthesize`, `prove`, `reframe`, and both ideation contexts)
+also foregrounds up to six exact persisted negative-memory lessons. The pure
+selector prioritizes direct target/focus references or closure relations, then
+shared live construction ownership, then completed reframe provenance on that
+route/obligation. Root escapes instead receive lessons from live workstream routes
+and the last route touched by a completed controller receipt (or the latest
+persisted route root when no receipt identifies one). Equal priorities use newest
+entity IDs first. Contract-only relevance does not anchor historical branches.
+Lessons retain their wording, provenance and trust state; they are scoped evidence,
+not universal impossibility claims. Reusing a failed or over-strong mechanism must
+identify a materially changed premise or mechanism. The dynamic
+`NEGATIVE RESEARCH MEMORY` section foregrounds these records, and
+`selections.negative_memory_ids` / `context_scope.negative_memory_ids` list exactly
+the selected lessons. Memory records never become expansion anchors. Attack scope
+and the strategist remain unchanged.
 The receipt also retains exact `prompt_utf8_bytes`. Omission means
 only that this bounded execution policy did not select the entity; it is not a
 scientific relevance judgment. Prompts contain only the supplied focused graph

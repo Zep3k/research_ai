@@ -1396,14 +1396,16 @@ def _active_obligation_history(
 
 def _obligation_ideation_context(
     context: ResearchContext, workstream_id: int, primary_id: int, obligation_id: int,
+    history: tuple[dict, ...] = (),
 ) -> ResearchContext:
     """Retain the local premise, live owners and relevant negative evidence exactly."""
     roots = _stored_id_set(_attribute(context, obligation_id, ROUTE_IDS)) & live_construction_route_ids(context)
     params = dict(workstream_id=workstream_id, primary_entity_id=primary_id,
                   target_entity_id=obligation_id, focus_obligation_id=obligation_id,
-                  operation="develop")
+                  operation="develop", history=history)
     scoped = focus_research_context(context, additional_entity_ids=tuple(sorted(roots)), **params)
-    local_ids = {int(e["id"]) for e in scoped.entities} - _input_ids(context, workstream_id)
+    local_ids = ({int(e["id"]) for e in scoped.entities} - _input_ids(context, workstream_id)
+                 - set(scoped.selections.get("negative_memory_ids", ())))
     evidence = {
         int(e["id"]) for e in context.entities
         if e["entity_type"] in {"Obstruction", "Counterexample", "FailedApproach"}
@@ -1423,6 +1425,7 @@ def _obligation_ideation_context(
 
 def _top_level_ideation_context(
     context: ResearchContext, workstream_id: int, primary_id: int, trigger_ids: tuple[int, ...],
+    history: tuple[dict, ...] = (),
 ) -> ResearchContext:
     """Exact contract, live roots, latest four live artifacts per root and evidence."""
     roots = live_construction_route_ids(context)
@@ -1451,6 +1454,7 @@ def _top_level_ideation_context(
         context, workstream_id=workstream_id, primary_entity_id=primary_id,
         target_entity_id=primary_id, operation="develop",
         additional_entity_ids=tuple(sorted(anchors | evidence)), forward_dependencies_only=True,
+        history=history,
     )
 
 
@@ -3194,9 +3198,9 @@ def _run_research(
                 spec = get_model_spec(model)
                 contract = _problem_contract(full_context, workstream_id)
                 ideation_context = (
-                    _obligation_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.focus_obligation_id)
+                    _obligation_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.focus_obligation_id, history)
                     if trigger.focus_obligation_id is not None else
-                    _top_level_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.entity_ids)
+                    _top_level_ideation_context(full_context, workstream_id, int(primary["id"]), trigger.entity_ids, history)
                 )
                 ideation_prompt = build_ideation_prompt(ideation_context, contract, trigger)
                 estimated_cost = budget_guard(
@@ -3306,6 +3310,7 @@ def _run_research(
             operation=choice.operation,
             continuation_route_ids=tuple(sorted(_constructive_continuation_streak(full_context, history)[0]))
             if choice.continue_construction else (),
+            history=history,
         )
         response_model = _execution_response_model(choice.operation, route.provider)
         prompt = _research_prompt_sections(

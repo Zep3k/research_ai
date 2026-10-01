@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from .db import connect
 from .errors import TheoryError
+from .research_negative_memory import select_negative_memory
 from .research_routes import ROUTE_IDS, live_construction_route_ids, persisted_id_set, route_entity_is_live
 from .trust import TrustState, require_entity, source_has_identifiable_origin
 
@@ -112,6 +113,7 @@ def focus_research_context(
     operation: str | None = None,
     continuation_route_ids: tuple[int, ...] = (),
     forward_dependencies_only: bool = False,
+    history: tuple[dict, ...] = (),
 ) -> ResearchContext:
     """Select exact graph objects by persisted dependencies, never text ranking.
 
@@ -270,6 +272,16 @@ def focus_research_context(
     else:
         expand_dependencies(included)
 
+    memory_enabled = operation in {"develop", "synthesize", "prove", "reframe"}
+    negative_memory_ids = select_negative_memory(
+        full_context, workstream_id=workstream_id, primary_entity_id=primary_entity_id,
+        target_entity_id=target_entity_id, focus_obligation_id=focus_obligation_id,
+        operation=operation,
+        consumed_entity_ids=consumed_entity_ids, additional_entity_ids=additional_entity_ids,
+        continuation_route_ids=continuation_route_ids, history=history,
+    ) if memory_enabled else ()
+    # Lessons are exact records, not graph-expansion seeds for historical branches.
+    included.update(negative_memory_ids)
     included &= available
     entities = tuple(entity for entity in full_context.entities if int(entity["id"]) in included)
     relations = tuple(
@@ -293,8 +305,9 @@ def focus_research_context(
                     if entity_id in included},
         sources=tuple(source for source in full_context.sources if int(source["entity_id"]) in included),
         workstream_links=tuple(link for link in full_context.workstream_links if int(link["entity_id"]) in included),
-        selections={key: tuple(entity_id for entity_id in ids if entity_id in included)
-                    for key, ids in full_context.selections.items()},
+        selections={**{key: tuple(entity_id for entity_id in ids if entity_id in included)
+                       for key, ids in full_context.selections.items()},
+                    **({"negative_memory_ids": negative_memory_ids} if memory_enabled else {})},
         epistemic=epistemic,
         context_scope={
             "mode": "focused_research_operation",
@@ -307,6 +320,7 @@ def focus_research_context(
             "included_entity_ids": [int(entity["id"]) for entity in entities],
             "full_workstream_entity_count": len(full_context.entities),
             "focused_entity_count": len(entities),
+            **({"negative_memory_ids": list(negative_memory_ids)} if memory_enabled else {}),
         },
     )
 
