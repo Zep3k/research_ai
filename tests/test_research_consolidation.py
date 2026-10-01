@@ -197,7 +197,7 @@ def test_ordinary_unfinished_develop_cannot_renew_an_exhausted_route_streak(cons
     assert baseline.operation == "synthesize"
 
 
-def test_checkpoint_remains_optional_with_pending_attack(construction):
+def test_committed_route_checkpoint_defers_to_pending_attack(construction):
     ws, primary_id, root = construction
     components = reach_checkpoint(ws, primary_id, root)
     with connect() as con:
@@ -214,7 +214,8 @@ def test_checkpoint_remains_optional_with_pending_attack(construction):
     assert baseline.operation == "attack" and baseline.target_entity_id == proof
     choice = _route_consolidation_choice(context, ws, primary_id, history, (obligation,))
     assert choice.consumed_entity_ids == tuple(reversed(components))
-    assert LegalResearchMove.from_choice(choice) in moves
+    assert LegalResearchMove.from_choice(choice) not in moves
+    assert {move.operation for move in moves} == {"attack"}
     assert LegalResearchMove.from_choice(baseline) in moves
 
 

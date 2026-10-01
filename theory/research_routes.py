@@ -178,6 +178,27 @@ def live_construction_route_ids(context: ResearchContext) -> frozenset[int]:
     )
 
 
+def committed_construction_route_ids(
+    context: ResearchContext, workstream_id: int, open_obligation_ids: tuple[int, ...],
+) -> frozenset[int]:
+    """Live routes owning both persisted construction and an active open premise.
+
+    The caller supplies the graph's active obligations. Neither history nor
+    relevance references can create ownership or commitment.
+    """
+    linked = {int(link["entity_id"]) for link in context.workstream_links
+              if int(link["workstream_id"]) == workstream_id}
+    construction_owners = frozenset().union(*(
+        persisted_id_set(attrs.get(ROUTE_IDS)) for entity_id, attrs in context.attributes.items()
+        if entity_id in linked and attrs.get("research_artifact_type") in CONSTRUCTION_TYPES
+    ))
+    obligation_owners = frozenset().union(*(
+        persisted_id_set(context.attributes.get(i, {}).get(ROUTE_IDS))
+        for i in open_obligation_ids if i in linked
+    ))
+    return live_construction_route_ids(context) & construction_owners & obligation_owners
+
+
 def entity_has_closing_relation(context: ResearchContext, entity_id: int) -> bool:
     """Only directed active edges establish refutation scope, never relevance."""
     return any(

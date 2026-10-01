@@ -40,6 +40,7 @@ from .research_progress import (
 )
 from .research_routes import (
     CONSTRUCTION_TYPES, ROUTE_IDS, STARTED_AT, record_construction_routes,
+    committed_construction_route_ids,
     live_construction_route_ids, persisted_id_set as _stored_id_set,
     entity_has_closing_relation,
     route_entity_is_live as _route_entity_is_live,
@@ -931,7 +932,7 @@ def _obligation_route_activity(
     live_routes = live_construction_route_ids(context)
     route_allowed = {
         i for i, roots in route_owned.items()
-        if (not roots or roots & live_routes) and not entity_has_closing_relation(context, i)
+        if (not roots or roots & live_routes) and _route_entity_is_live(context, i)
     }
     # Bypass descendants still require an attached parent. Ordinary ownership
     # may be shared across routes even when an older parent route was superseded.
@@ -973,6 +974,29 @@ def _construction_entity_is_active(context: ResearchContext, entity_id: int) -> 
     return not roots or bool(roots & live_construction_route_ids(context))
 
 
+def _validate_construction_choice(context: ResearchContext, choice: OperationChoice) -> None:
+    """Ordinary construction cannot target or consume a failed construction.
+
+    Refutation artifacts may be explicitly consumed as evidence. Attack and
+    necessity/bypass audits retain their existing independent validation.
+    """
+    if choice.operation not in {"develop", "prove", "synthesize"} or context.workstream is None:
+        return
+    inputs = _input_ids(context, int(context.workstream["id"]))
+    entities = {int(e["id"]): e for e in context.entities}
+    for entity_id in {choice.target_entity_id, *choice.consumed_entity_ids} - inputs:
+        entity = entities.get(entity_id)
+        if (entity_id != choice.target_entity_id and entity is not None
+                and entity["entity_type"] in {"Obstruction", "Counterexample", "FailedApproach"}):
+            continue  # Explicit failure evidence, never an ordinary positive premise.
+        if (not _route_entity_is_live(context, entity_id)
+                or not _construction_entity_is_active(context, entity_id)):
+            raise TheoryError(
+                f"Ordinary {choice.operation} cannot construct from inactive entity #{entity_id}; "
+                "retain it as evidence or use explicit repair/necessity/bypass work."
+            )
+
+
 def _open_obligation_ids(
     context: ResearchContext, workstream_id: int, primary_entity_id: int
 ) -> tuple[int, ...]:
@@ -1010,6 +1034,7 @@ def _candidate_meets_obligation_closure_structure(
         return False
     return any(
         relation["relation_type"] == "ATTEMPTS"
+        and relation["status"] == "active"
         and int(relation["source_entity_id"]) == candidate_id
         and int(relation["target_entity_id"]) == obligation_id
         for relation in context.relations
@@ -1149,6 +1174,7 @@ def _relevant_synthesis_inputs(
         and entity["status"] == "active"
         and entity["trust_state"] != "contradicted"
         and not _has_terminal_branch_state(context, int(entity["id"]))
+        and _route_entity_is_live(context, int(entity["id"]))
         and _construction_entity_is_active(context, int(entity["id"]))
         and entity["entity_type"] in SYNTHESIS_INPUT_TYPES
         and _entity_is_relevant_to_obligation(context, int(entity["id"]), obligation_id)
@@ -1197,7 +1223,9 @@ def _primary_synthesis_bundles(
                 or entity["trust_state"] == "contradicted"
                 or not (attrs.get("research_artifact_type") or attrs.get("develop_item_type")
                         or attrs.get("develop_branch_name") or entity_id in origins)
-                or (kind not in negatives and _has_terminal_branch_state(context, entity_id))):
+                or (kind not in negatives and (
+                    not _route_entity_is_live(context, entity_id)
+                    or not _construction_entity_is_active(context, entity_id)))):
             continue
         key = attrs.get("research_material_key")
         statement = (attrs.get("research_statement")
@@ -1298,6 +1326,7 @@ def _relevant_unattacked_proof_attempts(
             or entity["trust_state"] == "contradicted"
             or not _construction_entity_is_active(context, entity_id)
             or not _route_entity_is_live(context, entity_id)
+            or _attribute(context, entity_id, "research_attack_state") is not None
             or _completed_for_target(history, "attack", entity_id)
         ):
             continue
@@ -1308,6 +1337,31 @@ def _relevant_unattacked_proof_attempts(
             candidates.append(entity)
     candidates.sort(key=lambda entity: -int(entity["id"]))
     return tuple(candidates)
+
+
+def _pending_proof_attacks(
+    context: ResearchContext, open_obligation_ids: tuple[int, ...],
+    history: tuple[dict, ...] = (),
+) -> dict[int, tuple[int, ...]]:
+    """Active ATTEMPTS edges keep proof adjudication visible above child premises."""
+    candidates = _relevant_unattacked_proof_attempts(context, history, open_obligation_ids)
+    return {
+        obligation: tuple(int(entity["id"]) for entity in candidates if any(
+            relation["status"] == "active" and relation["relation_type"] == "ATTEMPTS"
+            and int(relation["source_entity_id"]) == int(entity["id"])
+            and int(relation["target_entity_id"]) == obligation
+            for relation in context.relations
+        ))
+        for obligation in open_obligation_ids
+    }
+
+
+def _committed_obligation_ids(
+    context: ResearchContext, workstream_id: int, open_obligation_ids: tuple[int, ...],
+) -> tuple[int, ...]:
+    roots = committed_construction_route_ids(context, workstream_id, open_obligation_ids)
+    return tuple(i for i in open_obligation_ids
+                 if _stored_id_set(_attribute(context, i, ROUTE_IDS)) & roots)
 
 
 def _explicit_obligation_id(raw: object, obligation_ids: set[int]) -> int | None:
@@ -1491,6 +1545,8 @@ def eligible_open_obligation_ids(
     # created replacement obligations referencing the original parent.
     pending = {entity_id for entity_id in open_ids
                if _attribute(context, entity_id, "research_obligation_state") == "reframe_pending_attack"}
+    pending.update(i for i, candidates in _pending_proof_attacks(context, open_obligation_ids).items()
+                   if candidates)
     leaf_ids = sorted((open_ids - parents_with_open_children) | pending)
     # Malformed cyclic provenance has no leaf. Keep scheduling deterministic and live
     # without inventing a parent/child direction that is absent from the graph.
@@ -1715,7 +1771,9 @@ def _constructive_continuation(
     focus = previous.get("focus_obligation_id")
     if focus is not None and focus not in open_obligations:
         return None
-    if target not in _input_ids(context, workstream_id) and not _route_entity_is_live(context, target):
+    if target not in _input_ids(context, workstream_id) and (
+        not _route_entity_is_live(context, target) or not _construction_entity_is_active(context, target)
+    ):
         return None
     accepted = _stored_id_set(previous.get("artifact_ids_json"))
     if any(
@@ -1741,6 +1799,11 @@ def _constructive_continuation(
         )
         if owning:
             focus = _select_focus_obligation(context, history, owning)
+    if focus is not None and (
+        _attribute(context, focus, "research_obligation_state") == "reframe_pending_attack"
+        or _relevant_unattacked_proof_attempts(context, history, (focus,))
+    ):
+        return None
     return OperationChoice(
         "develop", target,
         "Continue the same unfinished protocol route: the previous develop step accepted "
@@ -1765,6 +1828,13 @@ def choose_next_operation(
     entity_by_id = {int(entity["id"]): entity for entity in context.entities}
     open_obligations = _open_obligation_ids(context, workstream_id, primary_id)
     continuation = _constructive_continuation(context, workstream_id, history, open_obligations)
+    committed = _committed_obligation_ids(context, workstream_id, open_obligations)
+    if committed:
+        if (continuation is not None and continuation.focus_obligation_id in committed
+                and continuation.target_entity_id == continuation.focus_obligation_id):
+            return continuation
+        obligation_id = _select_focus_obligation(context, history, committed)
+        return _obligation_frontier_choice(context, workstream_id, history, open_obligations, obligation_id)
     if continuation is not None:
         return continuation
     precise = [
@@ -1968,26 +2038,37 @@ def generate_legal_research_moves(
     *,
     strategy_enabled: bool = True,
 ) -> tuple[LegalResearchMove, ...]:
-    """Pure frontier enumeration, with one optional strategic branch escape."""
+    """Pure frontier enumeration, restricted to committed-route adjudication when needed."""
     history = _scientific_history(history)
     baseline = choose_next_operation(context, workstream_id, primary, history)
     open_ids = _open_obligation_ids(context, workstream_id, int(primary["id"]))
+    committed = _committed_obligation_ids(context, workstream_id, open_ids)
+    frontier_ids = committed or open_ids
     consolidation = _route_consolidation_choice(context, workstream_id, int(primary["id"]), history, open_ids)
     if open_ids:
-        choices = ([baseline] if baseline.continue_construction else []) + [
-            _obligation_frontier_choice(
+        choices = [baseline] if baseline.continue_construction else []
+        pending = _pending_proof_attacks(context, frontier_ids, history)
+        local_choices = []
+        for obligation in eligible_open_obligation_ids(context, frontier_ids):
+            local = _obligation_frontier_choice(
                 context, workstream_id, history, open_ids, obligation, exclude_terminal=True
             )
-            for obligation in eligible_open_obligation_ids(context, open_ids)
-        ]
-        for obligation in eligible_open_obligation_ids(context, open_ids):
-            if _can_reframe(context, workstream_id, obligation, history):
+            choices.append(local)
+            local_choices.append(local)
+            for candidate_id in pending[obligation]:
+                choices.append(OperationChoice(
+                    "attack", candidate_id, "Adjudicate the live proof attempt for this open obligation.",
+                    open_obligation_ids=open_ids, focus_obligation_id=obligation,
+                ))
+        for local in local_choices:
+            obligation = local.focus_obligation_id
+            if local.operation != "attack" and _can_reframe(context, workstream_id, obligation, history):
                 choices.append(OperationChoice(
                     "reframe", obligation,
                     "Audit whether this provisional obligation is required by the problem contract.",
                     open_obligation_ids=open_ids, focus_obligation_id=obligation,
                 ))
-        if strategy_enabled:
+        if strategy_enabled and not committed:
             choices.append(OperationChoice(
                 operation="develop",
                 target_entity_id=int(primary["id"]),
@@ -2026,9 +2107,9 @@ def generate_legal_research_moves(
                 ),
                 develop_provenance="frontier",
             ))
-    if consolidation is not None:
+    if consolidation is not None and not committed:
         choices.append(consolidation)
-    if strategy_enabled:
+    if strategy_enabled and not committed:
         for bundle in _primary_synthesis_bundles(context, workstream_id, int(primary["id"]), history):
             choices.append(OperationChoice(
                 operation="synthesize", target_entity_id=int(primary["id"]),
@@ -2545,6 +2626,7 @@ def _persist_step(
     context: ResearchContext,
     report: ResearchStepReport,
 ) -> PersistedStep:
+    _validate_construction_choice(context, choice)
     existing_keys, fingerprints = _existing_duplicate_state(context)
     artifact_ids: list[int] = []
     accepted: list[tuple[ResearchArtifact, int]] = []
@@ -3193,6 +3275,13 @@ def _run_research(
             root_develop = next((move for move in legal_moves
                                  if move.operation == "develop" and move.target_entity_id == int(primary["id"])
                                  and move.focus_obligation_id is None), None)
+            if trigger is not None and trigger.focus_obligation_id is not None:
+                committed = _committed_obligation_ids(full_context, workstream_id, open_ids)
+                if ((committed and trigger.focus_obligation_id not in committed)
+                        or any(move.operation == "attack"
+                               and move.focus_obligation_id == trigger.focus_obligation_id
+                               for move in legal_moves)):
+                    trigger = None  # Ideated develops must satisfy the same frontier legality.
             if trigger is not None and (trigger.focus_obligation_id is not None or root_develop is not None):
                 model = cfg.research_ideation_model
                 spec = get_model_spec(model)
@@ -3298,6 +3387,7 @@ def _run_research(
                 raise
         assert selection is not None
         choice = selection.move.to_operation_choice()
+        _validate_construction_choice(full_context, choice)
         route = choose_model_route(choice, cfg, provider_override=provider_name)
         model_context = focus_research_context(
             full_context,

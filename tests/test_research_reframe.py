@@ -118,7 +118,7 @@ def test_wa_primary_develop_escape_preserves_old_route(wa, monkeypatch):
     assert set(_open_obligation_ids(context, workstream, primary_id)) == {obligation, broadcast, new_obligation}
     assert any(move.operation == "develop" and move.focus_obligation_id == new_obligation for move in moves)
     assert any(move.operation == "reframe" and move.focus_obligation_id == new_obligation for move in moves)
-    assert [move.move_id for move in moves].count(escape_id) == 1
+    assert escape_id not in {move.move_id for move in moves}
     candidate = add_linked_research_entity(
         workstream, "Lemma", "Conditional conflict visibility safety bound",
         related_entity_ids=(new_obligation,),

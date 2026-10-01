@@ -1,0 +1,333 @@
+{
+  "origin": "Structural projection of the persisted v4 graph at iteration 4; entity bodies and unrelated metadata are omitted.",
+  "workstream": {
+    "id": 1,
+    "project_id": 1,
+    "workstream_type": "research",
+    "goal": "Develop a concrete committee-based weak-agreement protocol using the committee, super-send, and threshold signatures from the supplied research state.",
+    "status": "active",
+    "summary": "Research controller stopped: max_calls_exhausted. The configured limit of 2 execution call(s) was reached. 4 proof obligations remain open.",
+    "created_at": "2026-10-01T09:41:58.992208+00:00",
+    "updated_at": "2026-10-01T10:03:46.204913+00:00"
+  },
+  "entities": [
+    {
+      "id": 1,
+      "entity_type": "ResearchIdea",
+      "title": "Develop committee-based weak agreement",
+      "status": "active",
+      "trust_state": "unverified",
+      "body": ""
+    },
+    {
+      "id": 2,
+      "entity_type": "Technique",
+      "title": "Protocol Component: Persistence-only phase: each party sends a phase-tagged threshold share for its input to every committee member using super-send. Each committee member combines any n-f valid shares it obtains and super-sends the resulti",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 3,
+      "entity_type": "FailedApproach",
+      "title": "Failed Approach: The rule “honest parties share their own input, and decide the first valid input certificate received” does not guarantee weak consistency.",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 4,
+      "entity_type": "Technique",
+      "title": "Protocol Component: Use fixed, instance-tagged rounds. In rounds 1–2, each party super-sends one share for its own input to every committee member. In rounds 3–4, each committee member may combine valid shares and super-send at most one res",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 5,
+      "entity_type": "Lemma",
+      "title": "Lemma: Conditional reception invariant: under the stated two-round delivery guarantee for honest super-senders and the fixed cutoffs above, if two honest parties record certificates for different values by the end of round 4, every honest p",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 6,
+      "entity_type": "Finding",
+      "title": "Parameter Analysis: The proposed share, certificate, report, and veto exchanges each use at most O(cn²(|v|+λ)) communication for honest protocol traffic, with a constant number of certificate-sized items per message. To retain that bound fo",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 7,
+      "entity_type": "Technique",
+      "title": "Protocol Component: Candidate eight-round protocol: in rounds 1–2, each party super-sends one input-tagged share to every committee member. In rounds 3–4, each member super-sends at most one certificate it can form to each party. Each party",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 8,
+      "entity_type": "OpenQuestion",
+      "title": "Proof Obligation: Establish the candidate's cutoff invariant for all eligible certificates: if the union of values recorded by honest parties at round 4 has size at least two, an honest committee member receives two distinct valid certifica",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 9,
+      "entity_type": "OpenQuestion",
+      "title": "Proof Obligation: Specify and justify a relay admission rule that forwards at most one appropriately tagged packet per sender–recipient–phase tuple, without losing the super-send guarantee for an honest sender. Bound packet size by an expli",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 10,
+      "entity_type": "ProofAttempt",
+      "title": "Proof Attempt: Let R_p contain the values of valid certificates delivered to honest party p through the end of round 4, with delivery processed before its round-5 report is chosen. If the union of the R_p has at least two values, the candid",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 11,
+      "entity_type": "OpenQuestion",
+      "title": "Proof Obligation: Specify why the operational test for a valid compact certificate accepts only a value supported by n−f distinct authentic shares bound to the same instance, phase, and value. Also fix local phase ordering so delivery at th",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    }
+  ],
+  "attributes": {
+    "2": {
+      "precise_candidate": "true",
+      "related_entity_ids": "[1]",
+      "research_artifact_type": "protocol_component",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2]",
+      "research_construction_started_iteration_id": "1",
+      "research_construction_superseded_by_route_ids": "[4]"
+    },
+    "3": {
+      "related_entity_ids": "[1]",
+      "research_artifact_type": "failed_approach",
+      "research_branch_status": "failed",
+      "research_construction_route_ids": "[2]"
+    },
+    "4": {
+      "precise_candidate": "true",
+      "related_entity_ids": "[1, 2, 3]",
+      "research_artifact_type": "protocol_component",
+      "research_branch_status": "promising",
+      "research_construction_route_ids": "[2, 4]",
+      "research_construction_started_iteration_id": "2"
+    },
+    "5": {
+      "precise_candidate": "true",
+      "related_entity_ids": "[1, 2, 3]",
+      "research_artifact_type": "lemma",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]"
+    },
+    "6": {
+      "related_entity_ids": "[1]",
+      "research_artifact_type": "parameter_analysis",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[4]"
+    },
+    "7": {
+      "precise_candidate": "true",
+      "related_entity_ids": "[2, 5, 1]",
+      "research_artifact_type": "protocol_component",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]"
+    },
+    "8": {
+      "is_proof_obligation": "true",
+      "related_entity_ids": "[2, 5, 1]",
+      "research_artifact_type": "proof_obligation",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]",
+      "research_obligation_state": "candidate_pending_attack"
+    },
+    "9": {
+      "is_proof_obligation": "true",
+      "related_entity_ids": "[2, 5, 1]",
+      "research_artifact_type": "proof_obligation",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]",
+      "research_obligation_state": "open"
+    },
+    "10": {
+      "addresses_obligation_ids": "[8]",
+      "precise_candidate": "true",
+      "related_entity_ids": "[5, 8, 1, 7]",
+      "research_artifact_type": "proof_attempt",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]",
+      "research_focus_obligation_id": "8"
+    },
+    "11": {
+      "is_proof_obligation": "true",
+      "related_entity_ids": "[5, 8, 1, 7]",
+      "research_artifact_type": "proof_obligation",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]",
+      "research_focus_obligation_id": "8",
+      "research_obligation_state": "open"
+    }
+  },
+  "relations": [
+    {
+      "id": 1,
+      "project_id": 1,
+      "source_entity_id": 10,
+      "relation_type": "ATTEMPTS",
+      "target_entity_id": 8,
+      "evidence_source_id": null,
+      "status": "active",
+      "trust_state": "quarantined",
+      "confidence": 0.0,
+      "created_at": "2026-10-01T09:51:00.321408+00:00"
+    }
+  ],
+  "workstream_links": [
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 1,
+      "role": "input",
+      "created_at": "2026-10-01T09:41:59.344556+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 2,
+      "role": "created",
+      "created_at": "2026-10-01T09:43:06.165033+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 3,
+      "role": "created",
+      "created_at": "2026-10-01T09:43:06.165286+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 4,
+      "role": "created",
+      "created_at": "2026-10-01T09:46:45.900774+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 5,
+      "role": "created",
+      "created_at": "2026-10-01T09:46:45.901062+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 6,
+      "role": "created",
+      "created_at": "2026-10-01T09:46:45.901296+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 7,
+      "role": "created",
+      "created_at": "2026-10-01T09:50:04.741023+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 8,
+      "role": "created",
+      "created_at": "2026-10-01T09:50:04.741297+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 9,
+      "role": "created",
+      "created_at": "2026-10-01T09:50:04.741513+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 10,
+      "role": "created",
+      "created_at": "2026-10-01T09:51:00.321068+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 11,
+      "role": "created",
+      "created_at": "2026-10-01T09:51:00.321362+00:00"
+    }
+  ],
+  "history": [
+    {
+      "id": 1,
+      "workstream_id": 1,
+      "iteration_number": 1,
+      "operation": "develop",
+      "target_entity_id": 1,
+      "focus_obligation_id": null,
+      "status": "completed",
+      "artifact_ids_json": "[2, 3]",
+      "consumed_entity_ids_json": "[]",
+      "selected_move_id": "develop:1:none:none",
+      "material_progress": 1,
+      "develop_provenance": "ordinary"
+    },
+    {
+      "id": 2,
+      "workstream_id": 1,
+      "iteration_number": 2,
+      "operation": "develop",
+      "target_entity_id": 1,
+      "focus_obligation_id": null,
+      "status": "completed",
+      "artifact_ids_json": "[4, 5, 6]",
+      "consumed_entity_ids_json": "[]",
+      "selected_move_id": "develop:1:none:none:idea:2:fixed_window_conflict_veto",
+      "material_progress": 1,
+      "develop_provenance": "idea"
+    },
+    {
+      "id": 3,
+      "workstream_id": 1,
+      "iteration_number": 3,
+      "operation": "synthesize",
+      "target_entity_id": 1,
+      "focus_obligation_id": null,
+      "status": "completed",
+      "artifact_ids_json": "[7, 8, 9]",
+      "consumed_entity_ids_json": "[2, 5]",
+      "selected_move_id": "synthesize:1:none:2,5",
+      "material_progress": 1,
+      "develop_provenance": "ordinary"
+    },
+    {
+      "id": 4,
+      "workstream_id": 1,
+      "iteration_number": 4,
+      "operation": "prove",
+      "target_entity_id": 5,
+      "focus_obligation_id": 8,
+      "status": "completed",
+      "artifact_ids_json": "[10, 11]",
+      "consumed_entity_ids_json": "[]",
+      "selected_move_id": "prove:5:8:none",
+      "material_progress": 1,
+      "develop_provenance": "ordinary"
+    }
+  ]
+}

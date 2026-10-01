@@ -97,14 +97,22 @@ class ScriptedProvider:
             result_artifacts = []
             for piece in pieces:
                 refs = [decision["target_entity_id"], *decision["required_consumed_entity_ids"]]
+                if decision["focus_obligation_id"] is not None:
+                    refs.append(decision["focus_obligation_id"])
                 refs.extend(keys[key] for key in piece.needs if key in keys)
                 result_artifacts.append(artifact(piece, refs, bad_assumption=self.fault == "forbidden_assumption" and piece.final))
+            addressed = ([decision["focus_obligation_id"]]
+                         if decision["focus_obligation_id"] is not None
+                         and decision["operation"] in {"prove", "synthesize"}
+                         and any(piece.kind in controller.PROOF_ARTIFACT_TYPES for piece in pieces) else [])
             response = {"operation": decision["operation"], "target_entity_id": decision["target_entity_id"],
                         "summary": "Bounded deterministic protocol stage.", "artifacts": result_artifacts,
-                        "consumed_entity_ids": decision["required_consumed_entity_ids"], "addressed_obligation_ids": [],
-                        "attack_outcome": "inconclusive" if decision["operation"] == "attack" else "not_applicable",
+                        "consumed_entity_ids": decision["required_consumed_entity_ids"], "addressed_obligation_ids": addressed,
+                        "attack_outcome": ("inconclusive" if missing or wrong_move else "no_critical_issue") if decision["operation"] == "attack" else "not_applicable",
                         "could_not_determine": ["Required construction stage or component unavailable."] if missing or wrong_move else [],
                         "human_judgment_required": False, "human_judgment_reason": None}
+            if kwargs["response_model"] is controller.FlatAttackReport:
+                response.pop("attack_outcome")
         return ModelResult(text=json.dumps(response), input_tokens=0, output_tokens=0, cost_usd=0)
 
 

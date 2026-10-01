@@ -52,6 +52,7 @@ def resume(ws, **kwargs):
 
 def test_iterations_10_11_failed_echo_rule_preserves_uniform_publication(publication, monkeypatch):
     ws, primary, root, obligation = publication
+    mark(root, precise_candidate="false")  # The focused obligation needs a missing mechanism.
     child = None
 
     def execute(decision, number):
@@ -93,7 +94,9 @@ def test_iterations_10_11_failed_echo_rule_preserves_uniform_publication(publica
     assert scoped_edges[0]["trust_state"] == "quarantined"
     iterations = _history(ws)[-2:]
     assert [i["iteration_number"] for i in iterations] == [10, 11]
-    assert all(i["selected_move_id"].endswith(":continue") for i in iterations)
+    assert iterations[0]["selected_move_id"] == f"develop:{obligation}:{obligation}:none"
+    assert iterations[1]["selected_move_id"].endswith(":continue")
+    assert all(i["focus_obligation_id"] == obligation for i in iterations)
     assert iterations[-1]["open_obligations_before"] == iterations[-1]["open_obligations_after"] == 1
     assert iterations[-1]["resolution_progress"] == 0
     assert frontier(ws, primary) == (context, moves, baseline)  # Reconstruction after resume.

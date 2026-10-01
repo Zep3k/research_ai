@@ -39,12 +39,13 @@ def test_continuation_recovers_single_owned_bottleneck_without_changing_target(c
     assert choice.continue_construction and choice.target_entity_id == primary
     assert choice.focus_obligation_id == obligation
     provider = DynamicProvider(lambda decision, _: step_report(decision, [artifact(
-        "protocol_component", "Extend the current construction with a still-unproved local release rule.",
-        "local_release_extension", [primary, root, obligation], branch_status="unresolved",
-    )]))
+        "proof_attempt", "Derive the local release rule conditional on the current witness.",
+        "local_release_argument", [root, obligation], branch_status="unresolved",
+    )], addressed=[obligation]))
     monkeypatch.setattr("theory.research.get_provider", lambda _: provider)
     research(ws, strategy="off", max_calls=1)
     assert _history(ws)[-1]["focus_obligation_id"] == obligation
+    assert _history(ws)[-1]["operation"] == "prove"
     context = for_workstream(ws)
     goal = next(e for e in context.entities if e["id"] == primary)
     moves = generate_legal_research_moves(context, ws, goal, _history(ws))
@@ -52,7 +53,7 @@ def test_continuation_recovers_single_owned_bottleneck_without_changing_target(c
                if m.operation == "develop" and m.target_entity_id == primary and not m.continue_construction)
 
 
-def test_continuation_and_unresolved_local_synthesis_trigger_obligation_ideation(construction, monkeypatch):
+def test_historical_continuation_and_unresolved_local_synthesis_trigger_obligation_ideation(construction, monkeypatch):
     ws, primary, root = construction
     obligation = add_work(ws, "proof_obligation", route=root, related=(primary, root))
     state = (ws, primary, root, obligation)
@@ -69,7 +70,15 @@ def test_continuation_and_unresolved_local_synthesis_trigger_obligation_ideation
                 result = result.model_copy(update={"text": json.dumps(report)})
         return result
     monkeypatch.setattr(provider, "complete", unresolved_synthesis)
-    research(ws, strategy="off", max_calls=1)
+    # Replay the older root continuation receipt. Commitment now forbids offering
+    # this root move, but its persisted focus must still count toward local ideation.
+    component, = append_step(ws, primary, route=root, continuation=True)
+    with connect() as con:
+        con.execute("UPDATE research_iterations SET focus_obligation_id=?,selected_move_id=? "
+                    "WHERE workstream_id=? AND iteration_number=2",
+                    (obligation, f"develop:{primary}:{obligation}:none:continue", ws))
+        set_attribute(con, component, "research_focus_obligation_id", str(obligation))
+        set_attribute(con, component, "related_entity_ids", json.dumps([primary, root, obligation]))
     add_work(ws, "finding", route=root, related=(obligation,))
     with connect() as con:
         con.execute("UPDATE workstreams SET status='active' WHERE id=?", (ws,))
@@ -127,6 +136,7 @@ def test_unrelated_root_develops_never_count_as_local_attempts(construction):
 @pytest.mark.parametrize("ablation", ["auto", "off", "openai", "anthropic"])
 def test_direct_local_work_suppresses_top_level_ideation(local, monkeypatch, ablation):
     ws, _, root, obligation = local
+    mark(root, precise_candidate="false")
     add_work(ws, "obstruction", route=root, state="blocked", related=(obligation,))
     provider = install(monkeypatch, batch(local), select_idea=False)
     result = research(ws, strategy="off" if ablation == "off" else "auto",
@@ -134,8 +144,7 @@ def test_direct_local_work_suppresses_top_level_ideation(local, monkeypatch, abl
     assert result.ideation_calls_made == 0 and not ideation_telemetry(ws)
     if ablation == "auto":
         assert any(m["operation"] == "reframe" for m in provider.offered[0])
-        assert any(m["operation"] == "develop" and m["focus_obligation_id"] is None
-                   for m in provider.offered[0])
+        assert all(m["focus_obligation_id"] == obligation for m in provider.offered[0])
 
 
 def test_local_ideation_is_not_suppressed_by_actionable_frontier(local, monkeypatch):
@@ -160,13 +169,17 @@ def test_each_actionable_focused_operation_gates_top_level_call(local, monkeypat
         for _ in range(2):
             add_work(ws, "finding", route=root, related=(obligation,))
     provider = install(monkeypatch, batch(local), select_idea=False)
-    # Admit the selector; skip execution so this gate test needs no attack output.
-    monkeypatch.setattr("theory.research.budget_guard", lambda *args, **kwargs: 0.25)
+    # Admit a selector when needed; skip execution, including singleton attacks.
+    monkeypatch.setattr("theory.research.budget_guard", lambda *args, **kwargs:
+                        0.25 if kwargs["purpose"] == "research:strategy" else 0.26)
     result = research(ws, max_calls=2, max_cost_usd=0.25)
     assert result.ideation_calls_made == result.calls_made == 0
-    assert result.strategy_calls_made == 1
-    assert [m["operation"] for m in provider.offered[0]
-            if m["focus_obligation_id"] == obligation and m["operation"] != "reframe"] == [operation]
+    assert result.strategy_calls_made == (0 if operation == "attack" else 1)
+    context = for_workstream(ws)
+    primary = next(e for e in context.entities if e["id"] == local[1])
+    moves = generate_legal_research_moves(context, ws, primary, _history(ws))
+    assert [m.operation for m in moves
+            if m.focus_obligation_id == obligation and m.operation != "reframe"] == [operation]
     assert not ideation_telemetry(ws)
 
 

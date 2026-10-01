@@ -6,6 +6,8 @@ import pytest
 from theory.db import connect
 from theory.graph import set_attribute
 from theory.research import (
+    LegalResearchMove, OperationChoice, ResearchSelection, ResearchStepReport,
+    _start_iteration, _persist_step, _complete_iteration, build_progress_record,
     _history, _open_obligation_ids, build_research_state, choose_next_operation,
     generate_legal_research_moves, live_construction_route_ids, research,
 )
@@ -33,17 +35,32 @@ def frontier(ws, primary_id):
     return context, primary, history, moves, choose_next_operation(context, ws, primary, history)
 
 
+def historical_frontier_step(ws, primary_id, outputs):
+    """Replay a pre-commitment root write receipt, without offering it as a legal move today."""
+    context = for_workstream(ws)
+    choice = OperationChoice("develop", primary_id, "Historical root construction receipt.",
+                             develop_provenance="frontier")
+    move = LegalResearchMove.from_choice(choice)
+    selection = ResearchSelection(move, "deterministic_baseline", (move.move_id,), choice.rationale)
+    iteration = _start_iteration(ws, choice, selection)
+    report = ResearchStepReport.model_validate(step_report({
+        "operation": "develop", "target_entity_id": primary_id, "required_consumed_entity_ids": [],
+    }, outputs))
+    persisted = _persist_step(iteration_id=iteration, workstream_id=ws, provider_name="openai",
+                              model="gpt-6-sol", choice=choice, context=context, report=report)
+    progress = build_progress_record(context_before=context, context_after=for_workstream(ws),
+                                    workstream_id=ws, primary_id=primary_id, choice=choice,
+                                    report=report, persisted=persisted)
+    _complete_iteration(iteration, ws, choice, report, progress)
+    return persisted
+
+
 @pytest.fixture
 def routes(monkeypatch, tmp_path):
     init_workspace(monkeypatch, tmp_path)
     ws, primary_id = make_research_workstream()
     step = 0
     ids = {}
-
-    def select(state):
-        selected = next(m for m in state["legal_moves"] if m["operation"] == "develop"
-                        and m["target_entity_id"] == primary_id and not m["continue_construction"])
-        return {"selected_move_id": selected["move_id"], "rationale": "Establish the distinct nine-round construction."}
 
     def execute(decision, _):
         nonlocal step
@@ -73,7 +90,7 @@ def routes(monkeypatch, tmp_path):
         return step_report(decision, outputs,
                            addressed=[ids["B"]] if step == 4 else [])
 
-    install_providers(monkeypatch, select=select, execute=execute)
+    install_providers(monkeypatch, execute=execute)
     first = research(ws, strategy="off", max_calls=1)
     ids["old"], ids["A"] = first.artifact_ids
     # Direct obligation development records the same root on its descendant.
@@ -82,7 +99,11 @@ def routes(monkeypatch, tmp_path):
         set_attribute(con, ids["old"], "precise_candidate", "false")
     second = resume(ws, strategy="off")
     ids["child"] = second.artifact_ids[0]
-    third = resume(ws)
+    # These old receipts deliberately left an unadjudicated route. New controllers
+    # must still reconstruct their ownership, though that escape is no longer legal.
+    third_report = execute({"operation": "develop", "target_entity_id": primary_id,
+                            "required_consumed_entity_ids": []}, 0)
+    third = historical_frontier_step(ws, primary_id, third_report["artifacts"])
     ids["new"], ids["B"] = third.artifact_ids
     fourth = resume(ws, strategy="off")
     ids["candidate"] = fourth.artifact_ids[0]
@@ -174,13 +195,8 @@ def test_v14_receipts_backfill_identical_ownership_and_frontier(routes, terminal
 
 
 @pytest.mark.parametrize("output", ["obligation_only", "duplicate", "failed_approach"])
-def test_frontier_selection_alone_cannot_supersede_current_route(routes, monkeypatch, output):
+def test_historical_frontier_selection_alone_cannot_supersede_current_route(routes, output):
     ws, primary_id, ids = routes
-
-    def select(state):
-        move = next(m for m in state["legal_moves"] if m["operation"] == "develop"
-                    and m["target_entity_id"] == primary_id and not m["continue_construction"])
-        return {"selected_move_id": move["move_id"], "rationale": "Try an alternative construction."}
 
     def execute(decision, _):
         if output == "obligation_only":
@@ -191,14 +207,15 @@ def test_frontier_selection_alone_cannot_supersede_current_route(routes, monkeyp
             item = artifact("failed_approach", "The proposed star topology allows the faulty hub to suppress every echo.", "star_refuted", [primary_id], branch_status="refuted")
         return step_report(decision, [item])
 
-    install_providers(monkeypatch, select=select, execute=execute)
-    resume(ws)
+    historical_frontier_step(ws, primary_id,
+                             execute({"operation": "develop", "target_entity_id": primary_id,
+                                      "required_consumed_entity_ids": []}, 0)["artifacts"])
     context = for_workstream(ws)
     assert SUPERSEDED_BY not in context.attributes[ids["new"]]
     assert ids["B"] in _open_obligation_ids(context, ws, primary_id)
 
 
-def test_new_frontier_supersedes_only_the_recorded_execution_route(routes, monkeypatch):
+def test_historical_new_frontier_supersedes_only_the_recorded_execution_route(routes):
     ws, primary_id, ids = routes
     independent = add_linked_research_entity(ws, "Technique", "An independent live construction")
     premise = add_linked_research_entity(ws, "OpenQuestion", "Bound the independent construction", proof_obligation=True)
@@ -207,15 +224,9 @@ def test_new_frontier_supersedes_only_the_recorded_execution_route(routes, monke
         set_attribute(con, independent, ROUTE_IDS, json.dumps([independent]))
         set_attribute(con, premise, ROUTE_IDS, json.dumps([independent]))
 
-    def select(state):
-        move = next(m for m in state["legal_moves"] if m["operation"] == "develop"
-                    and m["target_entity_id"] == primary_id and not m["continue_construction"])
-        return {"selected_move_id": move["move_id"], "rationale": "Leave the echo construction for a certificate collection design."}
-
-    install_providers(monkeypatch, select=select, execute=lambda decision, _: step_report(decision, [
+    outcome = historical_frontier_step(ws, primary_id, [
         artifact("protocol_component", "Collect signed epoch summaries through a rotating coordinator.", "epoch_route", [primary_id], branch_status="unresolved"),
-    ]))
-    outcome = resume(ws)
+    ])
     context = for_workstream(ws)
     new_root = outcome.artifact_ids[0]
     assert live_construction_route_ids(context) == frozenset({independent, new_root})

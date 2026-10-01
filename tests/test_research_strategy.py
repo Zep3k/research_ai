@@ -123,7 +123,7 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     context, primary, moves, baseline = load_moves(workstream, primary_id)
     assert [(move.operation, move.target_entity_id, move.focus_obligation_id) for move in moves] == [
         ("develop", a, a), ("attack", proof, b),
-        ("reframe", a, a), ("reframe", b, b),
+        ("reframe", a, a),
         ("develop", primary_id, None),
     ]
     assert baseline.operation == "develop" and baseline.target_entity_id == a
@@ -318,15 +318,14 @@ def test_local_frontier_precedence_and_exclusions(monkeypatch, tmp_path, kind, e
         assert candidate not in {move.target_entity_id for move in moves}
 
 
-def test_newest_proof_only_and_leaf_frontier(historical):
+def test_all_pending_proofs_and_leaf_frontier(historical):
     workstream, primary, a, b, old_proof = historical
     new_proof = add_linked_research_entity(workstream, "ProofAttempt", "New precise candidate")
     mark_candidate_attempt(new_proof, b)
     child = add_linked_research_entity(workstream, "OpenQuestion", "Child of A", proof_obligation=True, related_entity_ids=(a,))
     _, _, moves, _ = load_moves(workstream, primary)
     assert {move.focus_obligation_id for move in moves} == {b, child, None}
-    assert [move.target_entity_id for move in moves if move.operation == "attack"] == [new_proof]
-    assert old_proof not in {move.target_entity_id for move in moves}
+    assert [move.target_entity_id for move in moves if move.operation == "attack"] == [new_proof, old_proof]
 
 
 def test_no_obligations_preserves_alternative_attacks_with_root_develop(monkeypatch, tmp_path):
@@ -459,10 +458,11 @@ def test_research_state_is_compact_pure_deterministic_and_records_only_persisted
     assert state.open_obligations[0].last_focused_iteration == 8
     branch_b = next(o for o in state.open_obligations if o.id == b)
     assert (branch_b.obligation_state, branch_b.branch_status, branch_b.linked_unattacked_candidate_ids) == (
-        "candidate_pending_attack", "unresolved", (proof,),
+        "candidate_pending_attack", "unresolved", (),
     )
     assert state.blocked_or_terminal_branches[0].id == terminal
-    assert next(e for e in state.move_entities if e.id == proof).attack_state == "inconclusive"
+    assert proof not in {e.id for e in state.move_entities}
+    assert context.attributes[proof]["research_attack_state"] == "inconclusive"
     assert [row.iteration_number for row in state.recent_iterations] == list(range(3, 9))
     assert [row.material_progress for row in state.recent_iterations] == [True, False] * 3
     assert all(row.duplicate_count == 2 for row in state.recent_iterations)

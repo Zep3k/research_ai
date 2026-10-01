@@ -30,17 +30,22 @@ def test_structural_milestones_and_real_call_ledger(measured, index):
     assert result["execution_calls"] == len(case.stages)
     assert result["strategy_calls"] == (1 if case.strategy == "auto" else 0)
     assert result["logged_calls"] == result["execution_calls"] + result["strategy_calls"]
-    assert result["stop_reason"] == "max_calls_exhausted"
+    assert result["stop_reason"] == (
+        "candidate_survived_attack" if case.stages[-1].operation == "attack" else "max_calls_exhausted"
+    )
     assert [t["operation"] for t in result["trace"]] == [s.operation for s in case.stages]
     assert all(t["selected_move"] in t["legal_moves"] for t in result["trace"])
-    # Construction milestones are not automatic epistemic closure.
-    assert not any(t["resolution_progress"] for t in result["trace"])
+    # Construction milestones remain provisional; an explicit attack can close
+    # a scoped obligation without changing the proof's quarantined trust state.
+    assert [t["resolution_progress"] for t in result["trace"]] == [
+        stage.operation == "attack" for stage in case.stages
+    ]
 
 
 def test_obligation_reuse_and_failed_route_preservation(measured):
     queue = measured["results"][-1]
-    assert [len(t["open_obligations"]) for t in queue["trace"]] == [1, 1, 1]
-    assert [t["duplicate_count"] for t in queue["trace"]] == [0, 1, 0]
+    assert [len(t["open_obligations"]) for t in queue["trace"]] == [1, 1, 1, 0]
+    assert [t["duplicate_count"] for t in queue["trace"]] == [0, 1, 0, 0]
     assert queue["trace"][1]["duplicate_keys"] == ["queue_bound"]
     failed = measured["results"][2]
     assert "failed" in failed["trace"][-1]["branch_states"].values()
@@ -54,7 +59,7 @@ def test_negative_executor_controls_are_not_misreported_as_success(measured):
     assert not fanout["passed"]
     assert not fanout["checks"]["bounded_obligations"]
     assert not fanout["checks"]["final_candidate_structure"]
-    assert fanout["execution_calls"] == 3
+    assert fanout["execution_calls"] == 3  # Existing stagnation guard stops before the fourth allowance.
     assert all(not t["selected_move"].endswith(":continue") for t in fanout["trace"])
 
 
@@ -201,13 +206,14 @@ def test_dependency_closure_handles_cycles_without_reverse_branch_expansion(monk
     assert full == for_workstream(ws)
 
 
-def test_strategy_can_continue_a_route_without_reframing():
+def test_strategy_adjudicates_committed_route_without_reframing():
     case = replace(CASES[-1], strategy="auto")
     result = run_case(case)
     assert result["passed"], result
-    assert result["execution_calls"] == 3
+    assert result["execution_calls"] == 4
     assert result["strategy_calls"] <= result["execution_calls"]
-    assert all(t["selected_move"].endswith(":continue") for t in result["trace"][1:])
+    assert [t["operation"] for t in result["trace"]] == ["develop", "prove", "synthesize", "attack"]
+    assert all(t["selected_move"].split(":")[2] != "none" for t in result["trace"][1:])
     assert result["logged_calls"] == result["execution_calls"] + result["strategy_calls"]
 
 

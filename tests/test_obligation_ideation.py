@@ -209,7 +209,7 @@ def test_selected_local_idea_has_focused_move_strong_model_and_original_route(lo
     assert len(ideas) == 3
     assert all(m["operation"] == "develop" and m["target_entity_id"] == m["focus_obligation_id"] == obligation for m in ideas)
     assert any(m["operation"] == "reframe" and m["target_entity_id"] == obligation for m in moves)
-    assert any(m["operation"] == "develop" and m["target_entity_id"] == primary and m["idea"] is None for m in moves)
+    assert not any(m["operation"] == "develop" and m["target_entity_id"] == primary for m in moves)
     execution = next(r for r in provider.requests if r["response_model"].__name__ == "ResearchStepReport")
     assert execution["model"] == "gpt-6-sol"
     decision = decision_from_prompt(execution["prompt"])
