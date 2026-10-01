@@ -241,8 +241,8 @@ def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, rep
         return execute(decision, n)
     requests, constructed = install_providers(monkeypatch, execute=inspect, select=select_audit_or_attack)
     outcome = research(workstream, max_calls=2)
-    expected = [("openai", "gpt-6-luna"), ("openai", "gpt-6-sol")]
-    expected.append(("openai", "gpt-6-luna"))
+    expected = [("openai", "gpt-6-sol"), ("openai", "gpt-6-sol")]
+    expected.append(("openai", "gpt-6-sol"))
     expected.append(("anthropic", "claude-opus-5-5"))
     assert [(name, request["model"]) for name, request in requests] == expected
     assert requests[1][1]["effort"] == "high" and requests[-1][1]["effort"] == "medium"
@@ -272,7 +272,7 @@ def test_wa_audit_requires_independent_attack_before_bypass(wa, monkeypatch, rep
     assert iterations[1]["progress_class"] == "obligation_bypassed"
     assert iterations[1]["resolution_progress"] == (0 if replacement else 1)
     assert iterations[1]["resolved_obligation_count"] == 0  # Retraction is not a proof.
-    assert receipts[0] == ("research:strategy", "openai", "gpt-6-luna")
+    assert receipts[0] == ("research:strategy", "openai", "gpt-6-sol")
     assert receipts[1] == ("research:reframe", "openai", "gpt-6-sol")
     assert receipts[-1] == ("research:attack", "anthropic", "claude-opus-5-5")
 

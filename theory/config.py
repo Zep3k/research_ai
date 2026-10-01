@@ -23,6 +23,7 @@ class Config(BaseModel):
     research_reframe_model: str = "gpt-6-sol"
     research_ideation_model: str = "gpt-6-sol"
     research_strategist_model: str = "gpt-6-luna"
+    research_strategist_high_model: str = "gpt-6-sol"
 
     @classmethod
     def load(cls) -> "Config":

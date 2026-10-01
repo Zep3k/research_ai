@@ -600,6 +600,55 @@ class ModelRoute:
     rationale: str
 
 
+@dataclass(frozen=True)
+class StrategistRoute:
+    provider: str
+    model: str
+    effort: str
+    max_output_tokens: int
+    rationale: str
+
+
+def choose_strategist_route(state: ResearchState, cfg: Config) -> StrategistRoute:
+    """Pure routing from legal move metadata; scientific text is not inspected."""
+    moves = state.legal_moves
+    open_ids = {obligation.id for obligation in state.open_obligations}
+    primary_id = state.primary_target.id
+
+    def is_root_develop(move: ResearchMoveBrief) -> bool:
+        return (move.operation == "develop" and move.target_entity_id == primary_id
+                and move.focus_obligation_id is None)
+
+    def is_local_work(move: ResearchMoveBrief) -> bool:
+        return (move.focus_obligation_id is not None or move.target_entity_id != primary_id
+                or move.continue_construction
+                or move.operation in {"synthesize", "prove", "attack", "reframe"})
+
+    reason = "routine_local_ambiguity"
+    if any(is_root_develop(root) and root.move_id != local.move_id and is_local_work(local)
+           for root in moves for local in moves):
+        reason = "top_level_vs_local_route"
+    elif any(reframe.operation == "reframe"
+             and reframe.focus_obligation_id in open_ids
+             and solve.operation != "reframe"
+             and solve.focus_obligation_id == reframe.focus_obligation_id
+             for reframe in moves for solve in moves):
+        reason = "reframe_vs_solve"
+    elif any(move.idea is not None for move in moves):
+        reason = "ideation_selection"
+    elif len({move.focus_obligation_id for move in moves
+              if move.focus_obligation_id in open_ids}) > 1:
+        reason = "cross_obligation_prioritization"
+
+    high = reason != "routine_local_ambiguity"
+    model = cfg.research_strategist_high_model if high else cfg.research_strategist_model
+    spec = get_model_spec(model, "openai")
+    return StrategistRoute(
+        spec.provider, model, "high" if high else "medium",
+        STRATEGIST_MAX_OUTPUT_TOKENS, reason,
+    )
+
+
 def choose_model_route(
     choice: OperationChoice,
     cfg: Config,
@@ -2161,18 +2210,6 @@ def build_research_state(
     )
 
 
-def _strategist_model(cfg: Config) -> str:
-    model = cfg.research_strategist_model
-    get_model_spec(model)  # Refuse unpriced models through the shared registry.
-    if model != "gpt-6-luna":
-        raise ConfigurationError(
-            "Automatic research strategy requires OpenAI gpt-6-luna; "
-            f"{model!r} is not permitted for this milestone."
-        )
-    get_model_spec(model, "openai")
-    return model
-
-
 def _research_prompt(
     context: ResearchContext, primary: dict, choice: OperationChoice
 ) -> str:
@@ -3210,15 +3247,15 @@ def _run_research(
             strategy_enabled=strategy_enabled and strategy_calls_made + ideation_calls_made < max_calls,
         )
         if selection is None:
-            model = _strategist_model(cfg)
             state = build_research_state(
                 full_context, workstream_id=workstream_id, primary=primary,
                 history=history, legal_moves=legal_moves,
             )
+            strategy_route = choose_strategist_route(state, cfg)
             strategy_prompt = build_strategist_sections(state).as_prompt_content()
             strategy_cost = budget_guard(
-                cfg, model=model, prompt=strategy_prompt,
-                max_output_tokens=STRATEGIST_MAX_OUTPUT_TOKENS, purpose="research:strategy",
+                cfg, model=strategy_route.model, prompt=strategy_prompt,
+                max_output_tokens=strategy_route.max_output_tokens, purpose="research:strategy",
                 response_model=StrategistDecision,
             )
             if not invocation_budget.can_fit(strategy_cost):
@@ -3232,11 +3269,12 @@ def _run_research(
 
                 result = call_model(
                     run_id=None, workstream_id=workstream_id,
-                    provider=providers["openai"], provider_name="openai", model=model,
+                    provider=providers["openai"], provider_name=strategy_route.provider,
+                    model=strategy_route.model,
                     purpose="research:strategy", prompt=strategy_prompt,
-                    max_output_tokens=STRATEGIST_MAX_OUTPUT_TOKENS,
+                    max_output_tokens=strategy_route.max_output_tokens,
                     estimated_max_cost_usd=strategy_cost,
-                    response_model=StrategistDecision, effort="medium",
+                    response_model=StrategistDecision, effort=strategy_route.effort,
                     validate_response=validate_strategy,
                     invocation_budget=invocation_budget,
                 )
@@ -3245,7 +3283,7 @@ def _run_research(
                     baseline_choice=baseline_choice, legal_moves=legal_moves,
                     strategy_enabled=True,
                     decision=parse_json_model(result.text, StrategistDecision),
-                    strategy_model=model,
+                    strategy_model=strategy_route.model,
                 )
             except Exception as exc:
                 with connect() as con:

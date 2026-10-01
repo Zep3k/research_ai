@@ -318,7 +318,8 @@ After choosing the operation, the pure
 | `attack` without a focus obligation | OpenAI `gpt-6-sol` | high |
 | `attack` with a focus obligation | Anthropic `claude-opus-5-5` | medium |
 | ideation (when triggered) | OpenAI `gpt-6-sol` | high |
-| strategy selection (when needed) | OpenAI `gpt-6-luna` | medium |
+| routine strategy selection (when needed) | OpenAI `gpt-6-luna` | medium |
+| strategy selection at a scientific fork | OpenAI `gpt-6-sol` | high |
 
 Luna is the cheap default worker, Sol handles constructive reasoning and ordinary
 attacks, and Opus handles the independent critic whose focused attack can contribute
@@ -434,10 +435,16 @@ Move IDs encode operation, target, focus and ordered synthesis inputs, for examp
 `attack:14:11:none` or `synthesize:10:10:6,12`. Ordering and IDs are deterministic.
 
 With exactly one legal move, `--strategy auto` selects it for free. With multiple
-moves and a remaining planning slot, it makes one OpenAI `gpt-6-luna` call at **medium** effort, capped at **1,500
-output tokens**. `research_strategist_model` defaults to `gpt-6-luna` in old configs
-without rewriting them; this milestone permits only that trusted registry model
-for strategy, excluding Sol, Astra and Anthropic models. A compact, deterministic
+moves and a remaining planning slot, it makes exactly one OpenAI strategist call,
+capped at **4,000 output tokens**. Pure `choose_strategist_route()` routing uses
+`research_strategist_model` (default `gpt-6-luna`) at **medium** effort for routine
+local ambiguity, and `research_strategist_high_model` (default `gpt-6-sol`) at
+**high** effort when a root develop competes with local work, a reframe competes
+with solving the same open obligation, any transient idea is offered, or moves
+focus on multiple open obligations. Routing inspects only persisted state and
+legal move metadata. Both configured models must have trusted OpenAI pricing;
+budget admission and receipts use the selected model. Old configs load both
+defaults without being rewritten. A compact, deterministic
 `ResearchState` contains stored entity titles and lifecycle/trust/branch states,
 open obligations and their candidate IDs, exact legal moves, the last six
 completed/error iterations with typed progress, and controller counts. Its frozen

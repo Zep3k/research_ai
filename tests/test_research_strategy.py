@@ -144,7 +144,7 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     assert len(outcome.iteration_ids) == 1
     assert constructed == ["openai", "anthropic"]
     assert [(name, request["model"], request["effort"], request["max_output_tokens"]) for name, request in requests] == [
-        ("openai", "gpt-6-luna", "medium", 4000),
+        ("openai", "gpt-6-sol", "high", 4000),
         ("anthropic", "claude-opus-5-5", "medium", RESEARCH_MAX_OUTPUT_TOKENS),
     ]
     assert STRATEGIST_MAX_OUTPUT_TOKENS == 4000
@@ -157,7 +157,7 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
         assert con.execute("SELECT COUNT(*) FROM research_iterations").fetchone()[0] == 1
     receipt = receipts[0]
     assert [(r["provider"], r["model"], r["purpose"]) for r in receipts] == [
-        ("openai", "gpt-6-luna", "research:strategy"),
+        ("openai", "gpt-6-sol", "research:strategy"),
         ("anthropic", "claude-opus-5-5", "research:attack"),
     ]
     assert receipt["workstream_id"] == workstream and receipt["run_id"] is None
@@ -165,17 +165,20 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     assert (receipt["input_tokens"], receipt["output_tokens"], receipt["cache_read_input_tokens"]) == (500, 80, 100)
     assert receipt["uncached_input_tokens"] == 400
     assert receipt["cost_usd"] == 0.000081
+    assert admissions[0]["model"] == receipt["model"] == "gpt-6-sol"
     assert receipt["prompt_utf8_bytes"] == len(requests[0][1]["prompt"].encode("utf-8"))
     assert row["selection_mode"] == "strategist"
     assert json.loads(row["legal_move_ids_json"]) == [move.move_id for move in moves]
     assert row["selected_move_id"] == moves[1].move_id
     assert row["selection_rationale"] == "Test the concrete candidate before further expansion."
-    assert (row["strategy_provider"], row["strategy_model"], row["focus_obligation_id"]) == ("openai", "gpt-6-luna", b)
+    assert (row["strategy_provider"], row["strategy_model"], row["focus_obligation_id"]) == ("openai", "gpt-6-sol", b)
     assert outcome.artifact_ids == ()  # The planning rationale is never an artifact.
 
 
 @pytest.mark.parametrize("provider,strategy", [("auto", "off"), ("openai", "auto"), ("anthropic", "auto")])
 def test_baseline_and_explicit_provider_ablations(historical, monkeypatch, provider, strategy):
+    monkeypatch.setattr("theory.research.choose_strategist_route",
+                        lambda *args: pytest.fail("Ablations must not route a strategist"))
     workstream, primary, *_ = historical
     _, _, moves, baseline = load_moves(workstream, primary)
     requests, constructed = install_providers(monkeypatch)
@@ -197,6 +200,8 @@ def test_baseline_and_explicit_provider_ablations(historical, monkeypatch, provi
 
 
 def test_single_move_costs_zero_strategy_calls(monkeypatch, tmp_path):
+    monkeypatch.setattr("theory.research.choose_strategist_route",
+                        lambda *args: pytest.fail("Singletons must skip strategist routing"))
     init_workspace(monkeypatch, tmp_path)
     workstream, _ = make_research_workstream()
     requests, constructed = install_providers(monkeypatch)
@@ -503,10 +508,10 @@ def test_strategy_budget_guard_runs_before_provider(historical):
         assert con.execute("SELECT status FROM workstreams").fetchone()[0] == "active"
 
 
-@pytest.mark.parametrize("model", ["unpriced", "gpt-6-astra", "claude-fable-5-1", "gpt-6-sol", "claude-sonnet-5"])
-def test_strategy_model_is_priced_openai_luna_only(historical, model):
+@pytest.mark.parametrize("model", ["unpriced", "claude-fable-5-1", "claude-sonnet-5"])
+def test_strategy_high_model_must_be_priced_openai(historical, model):
     workstream, *_ = historical
-    Config(research_strategist_model=model).save()
+    Config(research_strategist_high_model=model).save()
     with pytest.raises(ConfigurationError):
         research(workstream, max_calls=1)
     with connect() as con:
@@ -519,6 +524,7 @@ def test_legacy_config_default_without_rewrite(monkeypatch, tmp_path):
     old = '{"monthly_budget_usd": 10}'
     path.write_text(old)
     assert Config.load().research_strategist_model == "gpt-6-luna"
+    assert Config.load().research_strategist_high_model == "gpt-6-sol"
     assert path.read_text() == old
 
 
@@ -647,7 +653,7 @@ def test_strategy_execution_duplicates_still_use_full_context(historical, monkey
 
 def test_strategy_cost_is_spent_before_execution_budget_admission(historical, monkeypatch):
     workstream, *_ = historical
-    Config(monthly_budget_usd=0.004).save()  # Admits Luna strategy, not the Opus execution cap.
+    Config(monthly_budget_usd=0.07).save()  # Admits Sol strategy, not the Opus execution cap.
     requests, _ = install_providers(monkeypatch)
     with pytest.raises(BudgetExceededError, match="research:attack"):
         research(workstream, max_calls=1)
