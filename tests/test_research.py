@@ -1012,6 +1012,7 @@ def test_parent_obligation_is_deferred_while_explicit_child_is_open(
     )
     with connect() as con:
         set_attribute(con, child, "research_focus_obligation_id", str(parent))
+        add_relation(con, parent, "DEPENDS_ON", child)
 
     choice = current_choice(workstream, target)
 

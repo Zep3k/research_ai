@@ -9,7 +9,7 @@ from theory.errors import ConfigurationError
 from theory.model_calls import budget_guard
 from theory.research import (
     LegalResearchMove, ObligationBrief, ResearchMoveBrief, StrategistRoute,
-    choose_strategist_route, generate_legal_research_moves, research,
+    STRATEGIST_MAX_OUTPUT_TOKENS, choose_strategist_route, generate_legal_research_moves, research,
 )
 from test_model_routing import transient_idea
 from test_research_prompts import strategist_state
@@ -78,7 +78,7 @@ def test_routes_are_pure_deterministic_and_ignore_scientific_text(monkeypatch, m
     before = state.model_dump_json(), cfg.model_dump_json()
     high = reason != "routine_local_ambiguity"
     expected = StrategistRoute("openai", "gpt-6-sol" if high else "gpt-6-luna",
-                              "high" if high else "medium", 4000, reason)
+                              "high" if high else "medium", STRATEGIST_MAX_OUTPUT_TOKENS, reason)
     assert choose_strategist_route(state, cfg) == expected
     assert choose_strategist_route(state, cfg) == expected
     # Ordering and scientific prose cannot escalate the routing decision.

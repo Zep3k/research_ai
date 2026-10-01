@@ -12,7 +12,7 @@ from theory.cli import app
 from theory.config import Config
 from theory.db import SCHEMA_VERSION, RESEARCH_SELECTION_COLUMNS, SCHEMA, connect, utcnow
 from theory.errors import BudgetExceededError, ConfigurationError, ModelOutputError, TheoryError
-from theory.graph import set_attribute
+from theory.graph import add_relation, set_attribute
 from theory.model_calls import budget_guard
 from theory.models import ModelResult
 from theory.prompts import render_prompt
@@ -144,10 +144,9 @@ def test_historical_attack_before_extra_expansion_and_strategy_telemetry(histori
     assert len(outcome.iteration_ids) == 1
     assert constructed == ["openai", "anthropic"]
     assert [(name, request["model"], request["effort"], request["max_output_tokens"]) for name, request in requests] == [
-        ("openai", "gpt-6-sol", "high", 4000),
+        ("openai", "gpt-6-sol", "high", STRATEGIST_MAX_OUTPUT_TOKENS),
         ("anthropic", "claude-opus-5-5", "medium", RESEARCH_MAX_OUTPUT_TOKENS),
     ]
-    assert STRATEGIST_MAX_OUTPUT_TOKENS == 4000
     execution = decision_from_prompt(requests[1][1]["prompt"])
     assert execution["operation"] == "attack" and execution["target_entity_id"] == proof
     assert [admission["purpose"] for admission in admissions] == ["research:strategy", "research:attack"]
@@ -323,6 +322,8 @@ def test_all_pending_proofs_and_leaf_frontier(historical):
     new_proof = add_linked_research_entity(workstream, "ProofAttempt", "New precise candidate")
     mark_candidate_attempt(new_proof, b)
     child = add_linked_research_entity(workstream, "OpenQuestion", "Child of A", proof_obligation=True, related_entity_ids=(a,))
+    with connect() as con:
+        add_relation(con, a, "DEPENDS_ON", child)
     _, _, moves, _ = load_moves(workstream, primary)
     assert {move.focus_obligation_id for move in moves} == {b, child, None}
     assert [move.target_entity_id for move in moves if move.operation == "attack"] == [new_proof, old_proof]
@@ -653,7 +654,7 @@ def test_strategy_execution_duplicates_still_use_full_context(historical, monkey
 
 def test_strategy_cost_is_spent_before_execution_budget_admission(historical, monkeypatch):
     workstream, *_ = historical
-    Config(monthly_budget_usd=0.07).save()  # Admits Sol strategy, not the Opus execution cap.
+    Config(monthly_budget_usd=0.12).save()  # Admits the current strategy cap, not the Opus execution cap.
     requests, _ = install_providers(monkeypatch)
     with pytest.raises(BudgetExceededError, match="research:attack"):
         research(workstream, max_calls=1)

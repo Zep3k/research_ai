@@ -47,7 +47,7 @@ from .research_routes import (
 )
 
 
-STRATEGIST_MAX_OUTPUT_TOKENS = 4000
+STRATEGIST_MAX_OUTPUT_TOKENS = 8000
 RESEARCH_MAX_OUTPUT_TOKENS = 16_000
 MAX_CONTROLLER_CALLS = 20
 MAX_CONSTRUCTIVE_CONTINUATIONS = 3
@@ -1512,40 +1512,68 @@ def _top_level_ideation_context(
     )
 
 
+def _obligation_dependencies(
+    context: ResearchContext, open_ids: set[int],
+) -> dict[int, set[int]]:
+    """Map parents to prerequisites using explicit active graph provenance.
+
+    P DEPENDS_ON C makes C a prerequisite of P. An explicitly proposed or
+    surviving necessity bypass records replacements on its candidate instead.
+    Scientific references, focus and construction ownership express no ordering.
+    """
+    dependencies = {i: set() for i in open_ids}
+    for relation in context.relations:
+        if relation.get("status") != "active" or relation.get("relation_type") != "DEPENDS_ON":
+            continue
+        parent = _explicit_obligation_id(relation.get("source_entity_id"), open_ids)
+        child = _explicit_obligation_id(relation.get("target_entity_id"), open_ids)
+        if parent is not None and child is not None and parent != child:
+            dependencies[parent].add(child)
+
+    for candidate_id, attrs in context.attributes.items():
+        parent = _explicit_obligation_id(attrs.get("research_reframe_target_obligation_id"), open_ids)
+        children = _stored_id_set(attrs.get("research_bypass_replacement_obligation_ids")) & open_ids
+        if parent is None or not children or not _route_entity_is_live(context, candidate_id):
+            continue
+        pending = (_attribute(context, parent, "research_obligation_state") == "reframe_pending_attack"
+                   and _attribute(context, parent, "research_reframe_candidate_id") == str(candidate_id))
+        if pending or bypass_route_is_live(context, parent, candidate_id):
+            dependencies[parent].update(children - {parent})
+    return dependencies
+
+
 def eligible_open_obligation_ids(
     context: ResearchContext,
     open_obligation_ids: tuple[int, ...],
 ) -> tuple[int, ...]:
-    """Return the existing actionable leaf frontier in stable ID order."""
+    """Suppress a parent only for an explicit, open, acyclic prerequisite."""
     if not open_obligation_ids:
         return ()
 
-    open_ids = set(open_obligation_ids)
-    parents_with_open_children: set[int] = set()
-    for child_id in open_obligation_ids:
-        attrs = context.attributes.get(child_id, {})
-        explicit_parents = set(_stored_id_set(attrs.get("related_entity_ids")))
-        focus_parent = _explicit_obligation_id(
-            attrs.get("research_focus_obligation_id"), open_ids
-        )
-        if focus_parent is not None:
-            explicit_parents.add(focus_parent)
-        parents_with_open_children.update(
-            parent_id
-            for parent_id in explicit_parents & open_ids
-            if parent_id != child_id
-            # An exhausted replacement must not hide the route it reactivated.
-            and not (
-                _attribute(context, parent_id, "research_necessity_audit_state") == "reactivated"
-                and not _route_entity_is_live(context, child_id)
-            )
-        )
+    open_ids = {i for i in open_obligation_ids
+                if _attribute(context, i, "research_obligation_state") not in INACTIVE_OBLIGATION_STATES
+                and _route_entity_is_live(context, i) and _construction_entity_is_active(context, i)}
+    dependencies = _obligation_dependencies(context, open_ids)
+    reachable: dict[int, set[int]] = {}
+    for start in open_ids:
+        visited: set[int] = set()
+        stack = [start]
+        while stack:
+            current = stack.pop()
+            if current not in visited:
+                visited.add(current)
+                stack.extend(dependencies[current] - visited)
+        reachable[start] = visited
+    # A cycle cannot establish a prerequisite order. Ignore its internal edges,
+    # including when an independent leaf exists outside the cycle.
+    parents_with_open_children = {parent for parent, children in dependencies.items()
+                                 if any(parent not in reachable[child] for child in children)}
 
     # A pending necessity challenge must remain actionable even if its audit
     # created replacement obligations referencing the original parent.
     pending = {entity_id for entity_id in open_ids
                if _attribute(context, entity_id, "research_obligation_state") == "reframe_pending_attack"}
-    pending.update(i for i, candidates in _pending_proof_attacks(context, open_obligation_ids).items()
+    pending.update(i for i, candidates in _pending_proof_attacks(context, tuple(sorted(open_ids))).items()
                    if candidates)
     leaf_ids = sorted((open_ids - parents_with_open_children) | pending)
     # Malformed cyclic provenance has no leaf. Keep scheduling deterministic and live

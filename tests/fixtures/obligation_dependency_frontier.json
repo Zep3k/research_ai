@@ -1,0 +1,100 @@
+{
+  "origin": "Scheduling projection of v7 obligations #8 and #9 on live construction route #4. Unvalidated bypass lifecycle is excluded to isolate the independent-obligation hierarchy; entity bodies and unrelated metadata are omitted.",
+  "workstream": {
+    "id": 1,
+    "status": "active"
+  },
+  "entities": [
+    {
+      "id": 1,
+      "entity_type": "OpenQuestion",
+      "title": "Develop a concrete committee-based weak-agreement protocol",
+      "status": "active",
+      "trust_state": "unverified",
+      "body": ""
+    },
+    {
+      "id": 4,
+      "entity_type": "Technique",
+      "title": "Protocol Component: Each party issues one share tagged with the instance and its input, then super-sends it to every committee member. After the two-round collection cutoff, each member forms a certificate from any n\u2212f matching shares it re",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 8,
+      "entity_type": "OpenQuestion",
+      "title": "Proof Obligation: Construct, from the supplied synchronous signed faulty-link model and primitives, a terminating all-party agreement step on certified-value-or-\u22a5 proposals that gives identical honest outputs, outputs x when every honest pr",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    },
+    {
+      "id": 9,
+      "entity_type": "OpenQuestion",
+      "title": "Proof Obligation: State and justify a super-send forwarding cap for the bypass route. Each honest party forwards at most one validly signed message per (originator, intended recipient, instance, phase), and each committee member's recipient",
+      "status": "active",
+      "trust_state": "quarantined",
+      "body": ""
+    }
+  ],
+  "attributes": {
+    "4": {
+      "precise_candidate": "true",
+      "related_entity_ids": "[1, 3]",
+      "research_artifact_type": "protocol_component",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[2, 4]",
+      "research_construction_started_iteration_id": "2"
+    },
+    "8": {
+      "is_proof_obligation": "true",
+      "related_entity_ids": "[6, 1]",
+      "research_artifact_type": "proof_obligation",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[4]",
+      "research_focus_obligation_id": "6",
+      "research_obligation_state": "open"
+    },
+    "9": {
+      "is_proof_obligation": "true",
+      "related_entity_ids": "[7, 8, 1]",
+      "research_artifact_type": "proof_obligation",
+      "research_branch_status": "unresolved",
+      "research_construction_route_ids": "[4]",
+      "research_focus_obligation_id": "6",
+      "research_obligation_state": "open"
+    }
+  },
+  "relations": [],
+  "workstream_links": [
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 1,
+      "role": "input",
+      "created_at": "2026-10-01T12:53:53.063419+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 4,
+      "role": "created",
+      "created_at": "2026-10-01T12:58:53.925544+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 8,
+      "role": "created",
+      "created_at": "2026-10-01T13:01:22.389847+00:00"
+    },
+    {
+      "project_id": 1,
+      "workstream_id": 1,
+      "entity_id": 9,
+      "role": "created",
+      "created_at": "2026-10-01T13:02:28.671680+00:00"
+    }
+  ]
+}
